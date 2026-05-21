@@ -1,0 +1,23 @@
+{
+  "id": "b5e8f50522b5f51f",
+  "user_input": "test connection",
+  "plan": [
+    {
+      "step": 1,
+      "action": "bash",
+      "args": {
+        "command": "ping -n 1 www.baidu.com"
+      },
+      "description": "测试网络连接，ping百度"
+    }
+  ],
+  "result": "成功",
+  "keywords": [
+    "connection",
+    "test"
+  ],
+  "created_at": 1779267349.3022287,
+  "updated_at": 1779267349.3022287,
+  "hit_count": 0,
+  "has_vector": true
+}

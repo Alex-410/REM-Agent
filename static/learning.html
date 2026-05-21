@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学习日志 — Big Agent</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f5f7; color: #1d1d1f; padding: 20px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 4px; letter-spacing: -0.3px; }
+  .subtitle { font-size: 13px; color: #8e8e93; margin-bottom: 20px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  .btn { background: #ffffff; border: 1px solid #d1d1d6; border-radius: 8px; padding: 8px 16px; color: #1d1d1f; font-size: 13px; cursor: pointer; transition: all .15s; }
+  .btn:hover { background: #f0f0f2; border-color: #aeaeb2; }
+  .btn-primary { background: #5e5ce6; color: #fff; border-color: #5e5ce6; }
+  .btn-primary:hover { background: #4b49c9; border-color: #4b49c9; }
+  .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat-card { background: #ffffff; border: 1px solid #e0e0e4; border-radius: 10px; padding: 14px 20px; flex: 1; min-width: 120px; }
+  .stat-card .num { font-size: 26px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.5px; }
+  .stat-card .label { font-size: 12px; color: #8e8e93; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  th { text-align: left; padding: 10px 14px; font-size: 12px; color: #8e8e93; border-bottom: 1px solid #e0e0e4; font-weight: 500; background: #fafafa; }
+  td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #f0f0f2; color: #1d1d1f; vertical-align: middle; }
+  tr:hover td { background: #f5f5f7; }
+  .tag { display: inline-block; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 500; margin: 1px; }
+  .tag-install { background: #e3f2fd; color: #1565c0; }
+  .tag-self { background: #fce4ec; color: #c62828; }
+  .tag-builtin { background: #f0f0f2; color: #6e6e73; }
+  .source-github { color: #1565c0; }
+  .source-self { color: #c62828; }
+  .source-builtin { color: #6e6e73; }
+  .time { font-size: 12px; color: #8e8e93; white-space: nowrap; }
+  .repo-link { color: #5e5ce6; text-decoration: none; font-size: 12px; }
+  .repo-link:hover { text-decoration: underline; }
+  .desc-text { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6e6e73; font-size: 12px; }
+  .empty { text-align: center; padding: 40px; color: #aeaeb2; font-size: 14px; }
+  .filter-bar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filter-btn { padding: 4px 12px; border-radius: 14px; border: 1px solid #d1d1d6; background: #fff; font-size: 12px; color: #6e6e73; cursor: pointer; }
+  .filter-btn.active { background: #5e5ce6; color: #fff; border-color: #5e5ce6; }
+  @media(max-width:640px){
+    body{padding:14px}
+    .stats{gap:10px}
+    .stat-card{padding:12px 16px;min-width:calc(50% - 10px)}
+    .stat-card .num{font-size:22px}
+    th,td{padding:8px 10px}
+    .desc-text{max-width:120px}
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>学习日志</h1>
+  <div class="subtitle">记录了 agent 自学了哪些技能、从哪学的、什么时候学的</div>
+
+  <div class="stats" id="stats">
+    <div class="stat-card"><div class="num" id="totalCount">-</div><div class="label">学习总次数</div></div>
+    <div class="stat-card"><div class="num" id="githubCount">-</div><div class="label">GitHub 安装</div></div>
+    <div class="stat-card"><div class="num" id="selfCount">-</div><div class="label">自学生成</div></div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn btn-primary" onclick="loadLog()">刷新</button>
+  </div>
+
+  <div class="filter-bar" id="filterBar">
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">全部</button>
+    <button class="filter-btn" data-filter="install" onclick="setFilter('install')">GitHub 安装</button>
+    <button class="filter-btn" data-filter="self-learn" onclick="setFilter('self-learn')">自学生成</button>
+  </div>
+
+  <table>
+    <thead><tr><th>时间</th><th>技能名称</th><th>来源</th><th>说明</th></tr></thead>
+    <tbody id="logBody"></tbody>
+  </table>
+</div>
+
+<script>
+let allLogs = [];
+let currentFilter = 'all';
+
+async function api(url, opts={}) {
+  const resp = await fetch(url, { headers: {'Content-Type':'application/json'}, ...opts });
+  return resp.json();
+}
+
+async function loadLog() {
+  const data = await api('/api/learning/log?limit=200');
+  allLogs = data.logs || [];
+  updateStats();
+  render();
+}
+
+function updateStats() {
+  const total = allLogs.length;
+  const github = allLogs.filter(l => l.source === 'github').length;
+  const selfLearned = allLogs.filter(l => l.source === 'self-learned').length;
+  document.getElementById('totalCount').textContent = total;
+  document.getElementById('githubCount').textContent = github;
+  document.getElementById('selfCount').textContent = selfLearned;
+}
+
+function setFilter(type) {
+  currentFilter = type;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === type);
+  });
+  render();
+}
+
+function render() {
+  const filtered = currentFilter === 'all'
+    ? allLogs
+    : allLogs.filter(l => l.type === currentFilter);
+
+  const tbody = document.getElementById('logBody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无学习记录</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(l => {
+    const typeTag = l.type === 'install'
+      ? '<span class="tag tag-install">GitHub 安装</span>'
+      : '<span class="tag tag-self">自学</span>';
+
+    const time = new Date(l.timestamp).toLocaleString('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+
+    let sourceInfo = '';
+    if (l.source === 'github') {
+      sourceInfo = '<span class="source-github">GitHub</span>';
+      if (l.repo) {
+        sourceInfo += '<br><a class="repo-link" href="' + esc(l.url || '#') + '" target="_blank">' + esc(l.repo) + '</a>';
+      }
+    } else if (l.source === 'self-learned') {
+      sourceInfo = '<span class="source-self">自学</span>';
+    } else {
+      sourceInfo = '<span class="source-builtin">内置</span>';
+    }
+
+    const desc = l.description || l.repo || '';
+    const descEl = desc ? '<div class="desc-text" title="' + esc(desc) + '">' + esc(desc) + '</div>' : '';
+
+    return '<tr>' +
+      '<td class="time">' + time + '</td>' +
+      '<td><strong>' + esc(l.name) + '</strong>' + descEl + '</td>' +
+      '<td>' + sourceInfo + '</td>' +
+      '<td>' + typeTag + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+loadLog();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "id": "df57f03729b2ab6d",
+  "user_input": "/do  搜索你好",
+  "plan": [
+    {
+      "step": 1,
+      "action": "web_search",
+      "args": {
+        "query": "你好",
+        "max_results": 5
+      },
+      "description": "搜索中文问候语‘你好’的相关信息，获取搜索结果中的内容"
+    }
+  ],
+  "result": "成功",
+  "keywords": [
+    "搜索你好"
+  ],
+  "created_at": 1779283011.8533092,
+  "updated_at": 1779283011.8533092,
+  "hit_count": 0,
+  "has_vector": true
+}

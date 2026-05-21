@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆管理 — Big Agent</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f5f7; color: #1d1d1f; padding: 20px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 20px; letter-spacing: -0.3px; }
+  h1 span { color: #8e8e93; font-size: 14px; font-weight: 400; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+  .toolbar input { flex: 1; min-width: 160px; background: #ffffff; border: 1px solid #d1d1d6; border-radius: 8px; padding: 8px 12px; color: #1d1d1f; font-size: 14px; }
+  .toolbar input:focus { outline: none; border-color: #5e5ce6; }
+  .toolbar input::placeholder { color: #aeaeb2; }
+  .btn { background: #ffffff; border: 1px solid #d1d1d6; border-radius: 8px; padding: 8px 16px; color: #1d1d1f; font-size: 13px; cursor: pointer; transition: all .15s; }
+  .btn:hover { background: #f0f0f2; border-color: #aeaeb2; }
+  .btn-primary { background: #5e5ce6; color: #fff; border-color: #5e5ce6; }
+  .btn-primary:hover { background: #4b49c9; border-color: #4b49c9; }
+  .btn-danger { background: #ff3b30; color: #fff; border-color: #ff3b30; }
+  .btn-danger:hover { background: #d6342a; }
+  .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat-card { background: #ffffff; border: 1px solid #e0e0e4; border-radius: 10px; padding: 14px 20px; flex: 1; min-width: 120px; }
+  .stat-card .num { font-size: 26px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.5px; }
+  .stat-card .label { font-size: 12px; color: #8e8e93; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  th { text-align: left; padding: 10px 14px; font-size: 12px; color: #8e8e93; border-bottom: 1px solid #e0e0e4; font-weight: 500; background: #fafafa; }
+  td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #f0f0f2; color: #1d1d1f; vertical-align: top; }
+  tr:hover td { background: #f5f5f7; }
+  .entry-text { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { display: inline-block; background: #f0f0f2; border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #6e6e73; margin: 1px; }
+  .tag-ok { background: #e8f5e9; color: #2e7d32; }
+  .tag-fail { background: #fce4ec; color: #c62828; }
+  .empty { text-align: center; padding: 40px; color: #aeaeb2; font-size: 14px; }
+  .bdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  .bdot.on { background: #34c759; }
+  .bdot.off { background: #aeaeb2; }
+  .step-summary { font-size: 12px; color: #6e6e73; cursor: pointer; }
+  .step-summary:hover { color: #5e5ce6; }
+  .step-detail { display: none; margin-top: 8px; font-size: 12px; }
+  .step-detail.open { display: block; }
+  .step-item { padding: 4px 8px; border-left: 3px solid #e0e0e4; margin-bottom: 4px; background: #fafafa; border-radius: 0 4px 4px 0; }
+  .step-item.ok { border-left-color: #34c759; }
+  .step-item.fail { border-left-color: #ff3b30; }
+  .step-item .action { font-weight: 500; color: #1d1d1f; }
+  .step-item .result-text { color: #6e6e73; font-size: 11px; margin-top: 2px; word-break: break-all; }
+  @media(max-width:640px){
+    body{padding:14px}
+    .stats{gap:10px}
+    .stat-card{padding:12px 16px;min-width:calc(50% - 10px)}
+    .stat-card .num{font-size:22px}
+    table{font-size:12px}
+    th,td{padding:8px 10px}
+    .entry-text{max-width:140px}
+    .toolbar input{min-width:120px}
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>记忆管理 <span id="ollamaStatus"></span></h1>
+
+  <div class="stats" id="stats">
+    <div class="stat-card"><div class="num" id="totalEntries">-</div><div class="label">记忆条目</div></div>
+    <div class="stat-card"><div class="num" id="vectorCount">-</div><div class="label">向量化</div></div>
+    <div class="stat-card"><div class="num" id="keywordCount">-</div><div class="label">关键词</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input type="text" id="searchInput" placeholder="搜索记忆（语义检索）..." onkeydown="if(event.key==='Enter') search()">
+    <button class="btn" onclick="search()">搜索</button>
+    <button class="btn" onclick="loadStats()">刷新</button>
+    <button class="btn btn-primary" onclick="rebuildVectors()">重建向量</button>
+  </div>
+
+  <table id="memTable">
+    <thead><tr><th style="width:28%">指令</th><th>步骤</th><th>结果</th><th style="width:50px">命中</th><th style="width:60px">向量</th><th style="width:70px">操作</th></tr></thead>
+    <tbody id="memBody"></tbody>
+  </table>
+</div>
+
+<script>
+async function api(url, opts={}) {
+  const resp = await fetch(url, { headers: {'Content-Type':'application/json'}, ...opts });
+  return resp.json();
+}
+
+async function loadStats() {
+  const s = await api('/api/memory');
+  document.getElementById('totalEntries').textContent = s.total_entries || 0;
+  document.getElementById('vectorCount').textContent = s.vector_count || 0;
+  document.getElementById('keywordCount').textContent = s.total_keywords || 0;
+  const statusEl = document.getElementById('ollamaStatus');
+  if (s.ollama_available) {
+    statusEl.innerHTML = '<span class="bdot on"></span> Ollama ' + (s.embedding_model||'');
+  } else {
+    statusEl.innerHTML = '<span class="bdot off"></span> Ollama 不可用（关键词模式）';
+  }
+  search();
+}
+
+function toggleSteps(id) {
+  const el = document.getElementById('steps-' + id);
+  if (el) el.classList.toggle('open');
+}
+
+async function search() {
+  const query = document.getElementById('searchInput').value.trim() || '__all__';
+  const data = await api('/api/memory/search?query=' + encodeURIComponent(query));
+  const tbody = document.getElementById('memBody');
+  if (!data.results || data.results.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无记忆</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.results.map(r => {
+    const plan = r.plan || [];
+    const stepResults = r.step_results || [];
+    const hasSteps = plan.length > 0;
+
+    // Build step detail HTML
+    let stepsHtml = '<span class="step-summary" onclick="toggleSteps(\'' + r.id + '\')">' + plan.length + ' 步';
+    if (stepResults.length > 0) {
+      const okCount = stepResults.filter(s => !s.error).length;
+      stepsHtml += ' (' + okCount + '/' + stepResults.length + ' 成功)';
+    }
+    stepsHtml += ' &#9654;</span>';
+
+    stepsHtml += '<div class="step-detail" id="steps-' + r.id + '">';
+    if (stepResults.length > 0) {
+      stepResults.forEach(function(s, i) {
+        const ok = !s.error;
+        const cls = ok ? 'ok' : 'fail';
+        const icon = ok ? '✅' : '❌';
+        const rText = ok
+          ? (typeof s.result === 'object' ? JSON.stringify(s.result).substring(0, 200) : String(s.result || '成功'))
+          : String(s.error || '').substring(0, 200);
+        stepsHtml += '<div class="step-item ' + cls + '">';
+        stepsHtml += '<span class="action">' + icon + ' ' + esc(s.action || '') + '</span>';
+        if (rText && rText !== 'success') {
+          stepsHtml += '<div class="result-text">' + esc(rText) + '</div>';
+        }
+        stepsHtml += '</div>';
+      });
+    } else if (plan.length > 0) {
+      plan.forEach(function(s, i) {
+        stepsHtml += '<div class="step-item">';
+        stepsHtml += '<span class="action">' + esc(s.action || '') + '</span>';
+        stepsHtml += '<div class="result-text">' + esc(s.description || '') + '</div>';
+        stepsHtml += '</div>';
+      });
+    }
+    stepsHtml += '</div>';
+
+    const resultTag = r.result === '成功'
+      ? '<span class="tag tag-ok">成功</span>'
+      : '<span class="tag tag-fail">' + esc(r.result) + '</span>';
+
+    return '<tr>' +
+      '<td class="entry-text" title="' + esc(r.user_input) + '">' + esc(r.user_input) + '</td>' +
+      '<td style="font-size:12px">' + (hasSteps ? stepsHtml : '<span style="color:#aeaeb2">-</span>') + '</td>' +
+      '<td>' + resultTag + '</td>' +
+      '<td>' + (r.hit_count || 0) + '</td>' +
+      '<td>' + (r.has_vector ? '<span class="tag tag-ok">是</span>' : '<span class="tag">否</span>') + '</td>' +
+      '<td><button class="btn btn-danger" style="padding:4px 10px;font-size:11px" onclick="deleteEntry(\'' + r.id + '\')">删除</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function deleteEntry(id) {
+  if (!confirm('删除这条记忆？')) return;
+  await api('/api/memory/delete?entry_id=' + id, { method: 'POST' });
+  search();
+}
+
+async function rebuildVectors() {
+  const btn = event.target;
+  btn.textContent = '生成中...';
+  btn.disabled = true;
+  const r = await api('/api/memory/rebuild', { method: 'POST' });
+  btn.textContent = '重建向量';
+  btn.disabled = false;
+  loadStats();
+}
+
+loadStats();
+</script>
+</body>
+</html>

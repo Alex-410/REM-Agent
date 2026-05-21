@@ -1,0 +1,25 @@
+{
+  "id": "6a3e5116acc0ae4f",
+  "user_input": "使用微信给Rem发送你好你在干嘛",
+  "plan": [
+    {
+      "step": 1,
+      "action": "wechat_send_text",
+      "args": {
+        "contact": "Rem",
+        "message": "你好"
+      }
+    }
+  ],
+  "result": "成功",
+  "keywords": [
+    "发送你好",
+    "你在干嘛",
+    "rem",
+    "使用微信"
+  ],
+  "created_at": 1779270116.029906,
+  "updated_at": 1779270116.029906,
+  "hit_count": 0,
+  "has_vector": true
+}

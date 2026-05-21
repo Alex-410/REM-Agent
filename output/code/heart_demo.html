@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>爱心代码 - Big Agent</title>
+<style>
+*{margin:0;padding:0}
+body{background:#1a1a2e;display:flex;justify-content:center;align-items:center;min-height:100vh;font-family:Arial,sans-serif}
+canvas{display:block;border-radius:12px;box-shadow:0 0 40px rgba(255,71,87,0.3)}
+h1{position:fixed;top:30px;color:#ff6b81;font-size:24px;text-shadow:0 0 20px rgba(255,71,87,0.5);z-index:10}
+</style>
+</head>
+<body>
+<h1>&#x2764; 送给你 &#x2764;</h1>
+<canvas id="c"></canvas>
+<script>
+const c=document.getElementById("c"),ctx=c.getContext("2d");
+c.width=800,c.height=600;
+let t=0;
+function draw(){
+    ctx.clearRect(0,0,c.width,c.height);
+    const cx=c.width/2,cy=c.height/2-20;
+    let s=Math.sin(t)*0.15+1.1;
+    ctx.fillStyle="#ff4757";
+    ctx.shadowColor="#ff6b81";
+    ctx.shadowBlur=15;
+    for(let a=0;a<Math.PI*2;a+=0.008){
+        const r=13*s*Math.sqrt(Math.abs(Math.sin(a)))/(Math.abs(Math.sin(a))+2)*16;
+        const x=cx+r*Math.cos(a),y=cy-r*Math.sin(a);
+        ctx.beginPath();
+        ctx.arc(x,y,1.8+Math.sin(t+a)*0.5,0,Math.PI*2);
+        ctx.fill();
+    }
+    for(let a=0;a<Math.PI*2;a+=0.05){
+        const r=13*s*Math.sqrt(Math.abs(Math.sin(a)))/(Math.abs(Math.sin(a))+2)*16;
+        const x=cx+r*Math.cos(a),y=cy-r*Math.sin(a);
+        ctx.fillStyle=`hsla(${a*30+Date.now()*0.01%360},100%,70%,0.4)`;
+        ctx.beginPath();
+        ctx.arc(x+Math.sin(t*2+a)*3,y+Math.cos(t*2+a)*3,4+Math.sin(t*3+a)*2,0,Math.PI*2);
+        ctx.fill();
+    }
+    t+=0.02;
+    requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>

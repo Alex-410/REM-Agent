@@ -1,0 +1,20 @@
+{
+  "id": "e201072cc7bb2524",
+  "user_input": "测试用微信发送消息给张三",
+  "plan": [
+    {
+      "step": 1,
+      "action": "test"
+    }
+  ],
+  "result": "成功",
+  "keywords": [
+    "信发送消",
+    "测试用微",
+    "息给张三"
+  ],
+  "created_at": 1779269530.6064641,
+  "updated_at": 1779269530.6064641,
+  "hit_count": 0,
+  "has_vector": true
+}
