@@ -778,7 +778,21 @@ function updTC(id, tool, result, isErr) {
   scroll();
 }
 
-function scroll() { requestAnimationFrame(() => { const m=document.getElementById('messages'); m.scrollTop=m.scrollHeight; })}
+function scroll() {
+  requestAnimationFrame(() => {
+    const m = document.getElementById('messages');
+    const threshold = 60;
+    if (m.scrollHeight - m.scrollTop - m.clientHeight < threshold) {
+      m.scrollTop = m.scrollHeight;
+    }
+  })
+}
+function forceScroll() {
+  requestAnimationFrame(() => {
+    const m = document.getElementById('messages');
+    m.scrollTop = m.scrollHeight;
+  })
+}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
 function setStatus(text, dot) {
@@ -792,7 +806,7 @@ async function send() {
   const msg = inp.value.trim();
   if (!msg || busy) return;
   inp.value = ''; setBusy(true);
-  addMsg('user', msg); hideThinking(); showThinking();
+  addMsg('user', msg); forceScroll(); hideThinking(); showThinking();
 
   const isDo = msg.trim().toLowerCase().startsWith('/do');
 
