@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>任务管理 — REM</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f5f3ef;--surface:#fff;--border:#e2ddd6;--border-light:#f0eeea;
+  --text:#1a1a1e;--text2:#6b6560;--text3:#9c9590;
+  --accent:#d84a2a;--accent-hover:#bf3d20;--accent-glow:rgba(216,74,42,0.08);
+  --navy:#1e2c3a;--green:#2a9d6e;--red:#d94a4a;--yellow:#c9940e;
+  --radius:12px;--radius-sm:8px;
+  --font:"DM Sans","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-display:"Syne","PingFang SC",sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono",monospace;
+}
+body{font-family:var(--font);background:var(--bg);color:var(--text);padding:20px}
+.container{max-width:960px;margin:0 auto}
+.nav{display:flex;align-items:center;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+.nav a{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border:1px solid var(--border);border-radius:20px;text-decoration:none;font-size:12px;color:var(--text2);transition:all .15s;background:var(--surface)}
+.nav a:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.nav a.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.nav-home{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--navy);text-decoration:none;padding:6px 14px;border:1px solid var(--border);border-radius:20px;transition:all .15s}
+.nav-home:hover{border-color:var(--accent);color:var(--accent)}
+h1{font-family:var(--font-display);font-size:22px;margin-bottom:4px;color:var(--navy)}
+.sub{color:var(--text3);font-size:12px;margin-bottom:24px}
+.stats{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;flex:1;min-width:100px;text-align:center}
+.stat .num{font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-mono)}
+.stat .label{font-size:11px;color:var(--text3);margin-top:4px}
+.toolbar{display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap}
+.btn{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;cursor:pointer;transition:all .15s;font-family:inherit;color:var(--text2)}
+.btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.btn-danger{background:var(--surface);border-color:var(--red);color:var(--red)}
+.btn-danger:hover{background:var(--red);color:#fff}
+.filters{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.filter-btn{padding:4px 12px;border-radius:14px;border:1px solid var(--border);background:var(--surface);font-size:12px;color:var(--text2);cursor:pointer;font-family:inherit}
+.filter-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:var(--radius);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+th{text-align:left;padding:10px 14px;font-size:12px;color:var(--text3);border-bottom:1px solid var(--border);font-weight:500;background:#fafaf8}
+td{padding:10px 14px;font-size:13px;border-bottom:1px solid var(--border-light);color:var(--text);vertical-align:middle}
+tr:hover td{background:var(--bg)}
+.tag{display:inline-block;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:500}
+.tag-running{background:#fff3e0;color:#e65100}
+.tag-completed{background:#e8f5e9;color:#2e7d32}
+.tag-failed{background:#fce4ec;color:#c62828}
+.tag-cancelled{background:#f5f5f5;color:#757575}
+.tag-pending{background:#e3f2fd;color:#1565c0}
+.progress-bar{width:100px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
+.progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
+.time{font-size:12px;color:var(--text3);white-space:nowrap}
+.empty{text-align:center;padding:40px;color:var(--text3);font-size:14px}
+.msg-text{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:640px){
+  body{padding:14px}
+  .stats{gap:10px}
+  .stat{padding:12px 16px;min-width:calc(50% - 10px)}
+  .stat .num{font-size:22px}
+  th,td{padding:8px 10px;font-size:12px}
+  .msg-text{max-width:140px}
+  .nav{gap:4px}
+  .nav a,.nav-home{padding:5px 10px;font-size:11px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="nav">
+    <a href="/" class="nav-home">REM</a>
+    <a href="/memory">记忆管理</a>
+    <a href="/tools">工具箱</a>
+    <a href="/skills">技能库</a>
+    <a href="/tasks" class="active">任务管理</a>
+    <a href="/learning">学习日志</a>
+  </div>
+
+  <h1>任务管理</h1>
+  <div class="sub">意图引擎执行的任务列表及其状态</div>
+
+  <div class="stats">
+    <div class="stat"><div class="num" id="totalTasks">-</div><div class="label">任务总数</div></div>
+    <div class="stat"><div class="num" id="activeTasks">-</div><div class="label">运行中</div></div>
+    <div class="stat"><div class="num" id="completedTasks">-</div><div class="label">已完成</div></div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn" onclick="loadTasks()">刷新</button>
+  </div>
+
+  <div class="filters">
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">全部</button>
+    <button class="filter-btn" data-filter="running" onclick="setFilter('running')">运行中</button>
+    <button class="filter-btn" data-filter="completed" onclick="setFilter('completed')">已完成</button>
+    <button class="filter-btn" data-filter="failed" onclick="setFilter('failed')">失败</button>
+  </div>
+
+  <table>
+    <thead><tr><th>任务</th><th>状态</th><th>进度</th><th>创建时间</th><th>操作</th></tr></thead>
+    <tbody id="taskBody"></tbody>
+  </table>
+</div>
+
+<script>
+let allTasks = [];
+let currentFilter = 'all';
+
+async function loadTasks() {
+  const data = await fetch('/api/tasks?limit=100').then(r => r.json());
+  allTasks = data.tasks || [];
+  document.getElementById('totalTasks').textContent = allTasks.length;
+  document.getElementById('activeTasks').textContent = data.active_count || 0;
+  document.getElementById('completedTasks').textContent = allTasks.filter(t => t.status === 'completed').length;
+  filterTasks();
+}
+
+function setFilter(status) {
+  currentFilter = status;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === status);
+  });
+  filterTasks();
+}
+
+function filterTasks() {
+  let filtered = allTasks;
+  if (currentFilter !== 'all') {
+    filtered = filtered.filter(t => t.status === currentFilter);
+  }
+  render(filtered);
+}
+
+const STATUS_LABELS = {pending:'等待中',running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消'};
+
+function render(tasks) {
+  const tbody = document.getElementById('taskBody');
+  if (!tasks.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无任务</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tasks.map(t => {
+    const tagClass = 'tag-' + (t.status || 'pending');
+    const statusTag = '<span class="tag ' + tagClass + '">' + (STATUS_LABELS[t.status] || t.status) + '</span>';
+    const pct = t.total_steps > 0 ? Math.round((t.current_step / t.total_steps) * 100) : 0;
+    const progress = t.total_steps > 0
+      ? '<span class="progress-bar"><span class="progress-fill" style="width:' + pct + '%"></span></span>' + t.current_step + '/' + t.total_steps
+      : '-';
+    const time = t.created_at ? new Date(t.created_at * 1000).toLocaleString('zh-CN', {
+      month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'
+    }) : '-';
+    const canCancel = t.status === 'running';
+    const canDelete = t.status !== 'running';
+    let actions = '';
+    if (canCancel) actions += '<button class="btn" style="padding:3px 10px;font-size:11px" onclick="cancelTask(\'' + t.id + '\')">取消</button> ';
+    if (canDelete) actions += '<button class="btn btn-danger" style="padding:3px 10px;font-size:11px" onclick="deleteTask(\'' + t.id + '\')">删除</button>';
+    return '<tr>' +
+      '<td><div class="msg-text" title="' + esc(t.message || '') + '">' + esc(t.message || '') + '</div></td>' +
+      '<td>' + statusTag + '</td>' +
+      '<td>' + progress + '</td>' +
+      '<td class="time">' + time + '</td>' +
+      '<td>' + actions + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function cancelTask(id) {
+  await fetch('/api/task/cancel/' + id, {method:'POST'});
+  loadTasks();
+}
+
+async function deleteTask(id) {
+  if (!confirm('删除此任务？')) return;
+  await fetch('/api/task/' + id, {method:'DELETE'});
+  loadTasks();
+}
+
+loadTasks();
+</script>
+</body>
+</html>

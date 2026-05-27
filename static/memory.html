@@ -3,68 +3,99 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>记忆管理 — Big Agent</title>
+<title>记忆管理 — REM</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f5f7; color: #1d1d1f; padding: 20px; }
-  .container { max-width: 960px; margin: 0 auto; }
-  h1 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 20px; letter-spacing: -0.3px; }
-  h1 span { color: #8e8e93; font-size: 14px; font-weight: 400; }
-  .toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
-  .toolbar input { flex: 1; min-width: 160px; background: #ffffff; border: 1px solid #d1d1d6; border-radius: 8px; padding: 8px 12px; color: #1d1d1f; font-size: 14px; }
-  .toolbar input:focus { outline: none; border-color: #5e5ce6; }
-  .toolbar input::placeholder { color: #aeaeb2; }
-  .btn { background: #ffffff; border: 1px solid #d1d1d6; border-radius: 8px; padding: 8px 16px; color: #1d1d1f; font-size: 13px; cursor: pointer; transition: all .15s; }
-  .btn:hover { background: #f0f0f2; border-color: #aeaeb2; }
-  .btn-primary { background: #5e5ce6; color: #fff; border-color: #5e5ce6; }
-  .btn-primary:hover { background: #4b49c9; border-color: #4b49c9; }
-  .btn-danger { background: #ff3b30; color: #fff; border-color: #ff3b30; }
-  .btn-danger:hover { background: #d6342a; }
-  .stats { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
-  .stat-card { background: #ffffff; border: 1px solid #e0e0e4; border-radius: 10px; padding: 14px 20px; flex: 1; min-width: 120px; }
-  .stat-card .num { font-size: 26px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.5px; }
-  .stat-card .label { font-size: 12px; color: #8e8e93; margin-top: 2px; }
-  table { width: 100%; border-collapse: collapse; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
-  th { text-align: left; padding: 10px 14px; font-size: 12px; color: #8e8e93; border-bottom: 1px solid #e0e0e4; font-weight: 500; background: #fafafa; }
-  td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #f0f0f2; color: #1d1d1f; vertical-align: top; }
-  tr:hover td { background: #f5f5f7; }
-  .entry-text { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { display: inline-block; background: #f0f0f2; border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #6e6e73; margin: 1px; }
-  .tag-ok { background: #e8f5e9; color: #2e7d32; }
-  .tag-fail { background: #fce4ec; color: #c62828; }
-  .empty { text-align: center; padding: 40px; color: #aeaeb2; font-size: 14px; }
-  .bdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-  .bdot.on { background: #34c759; }
-  .bdot.off { background: #aeaeb2; }
-  .step-summary { font-size: 12px; color: #6e6e73; cursor: pointer; }
-  .step-summary:hover { color: #5e5ce6; }
-  .step-detail { display: none; margin-top: 8px; font-size: 12px; }
-  .step-detail.open { display: block; }
-  .step-item { padding: 4px 8px; border-left: 3px solid #e0e0e4; margin-bottom: 4px; background: #fafafa; border-radius: 0 4px 4px 0; }
-  .step-item.ok { border-left-color: #34c759; }
-  .step-item.fail { border-left-color: #ff3b30; }
-  .step-item .action { font-weight: 500; color: #1d1d1f; }
-  .step-item .result-text { color: #6e6e73; font-size: 11px; margin-top: 2px; word-break: break-all; }
-  @media(max-width:640px){
-    body{padding:14px}
-    .stats{gap:10px}
-    .stat-card{padding:12px 16px;min-width:calc(50% - 10px)}
-    .stat-card .num{font-size:22px}
-    table{font-size:12px}
-    th,td{padding:8px 10px}
-    .entry-text{max-width:140px}
-    .toolbar input{min-width:120px}
-  }
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f5f3ef;--surface:#fff;--border:#e2ddd6;--border-light:#f0eeea;
+  --text:#1a1a1e;--text2:#6b6560;--text3:#9c9590;
+  --accent:#d84a2a;--accent-hover:#bf3d20;--accent-glow:rgba(216,74,42,0.08);
+  --navy:#1e2c3a;--green:#2a9d6e;--red:#d94a4a;--yellow:#c9940e;
+  --radius:12px;--radius-sm:8px;
+  --font:"DM Sans","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-display:"Syne","PingFang SC",sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono",monospace;
+}
+body{font-family:var(--font);background:var(--bg);color:var(--text);padding:20px}
+.container{max-width:960px;margin:0 auto}
+
+/* 导航 */
+.nav{display:flex;align-items:center;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+.nav a{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border:1px solid var(--border);border-radius:20px;text-decoration:none;font-size:12px;color:var(--text2);transition:all .15s;background:var(--surface)}
+.nav a:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.nav a.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.nav-home{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--navy);text-decoration:none;padding:6px 14px;border:1px solid var(--border);border-radius:20px;transition:all .15s}
+.nav-home:hover{border-color:var(--accent);color:var(--accent)}
+
+h1{font-family:var(--font-display);font-size:22px;margin-bottom:4px;color:var(--navy)}
+.sub{color:var(--text3);font-size:12px;margin-bottom:24px}
+.stats{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;flex:1;min-width:100px;text-align:center}
+.stat .num{font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-mono)}
+.stat .label{font-size:11px;color:var(--text3);margin-top:4px}
+.toolbar{display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap}
+.toolbar input{flex:1;min-width:160px;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;outline:none;font-family:inherit;background:var(--surface)}
+.toolbar input:focus{border-color:var(--accent)}
+.toolbar input::placeholder{color:var(--text3)}
+.btn{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;cursor:pointer;transition:all .15s;font-family:inherit;color:var(--text2)}
+.btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-danger{background:var(--surface);border-color:var(--red);color:var(--red)}
+.btn-danger:hover{background:var(--red);color:#fff}
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:var(--radius);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+th{text-align:left;padding:10px 14px;font-size:12px;color:var(--text3);border-bottom:1px solid var(--border);font-weight:500;background:#fafaf8}
+td{padding:10px 14px;font-size:13px;border-bottom:1px solid var(--border-light);color:var(--text);vertical-align:top}
+tr:hover td{background:var(--bg)}
+.entry-text{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{display:inline-block;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:500}
+.tag-ok{background:#e8f5e9;color:#2e7d32}
+.tag-fail{background:#fce4ec;color:#c62828}
+.empty{text-align:center;padding:40px;color:var(--text3);font-size:14px}
+.bdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.bdot.on{background:var(--green)}
+.bdot.off{background:var(--text3)}
+.step-summary{font-size:12px;color:var(--text2);cursor:pointer}
+.step-summary:hover{color:var(--accent)}
+.step-detail{display:none;margin-top:8px;font-size:12px}
+.step-detail.open{display:block}
+.step-item{padding:4px 8px;border-left:3px solid var(--border);margin-bottom:4px;background:#fafaf8;border-radius:0 4px 4px 0}
+.step-item.ok{border-left-color:var(--green)}
+.step-item.fail{border-left-color:var(--red)}
+.step-item .action{font-weight:500;color:var(--text)}
+.step-item .result-text{color:var(--text2);font-size:11px;margin-top:2px;word-break:break-all}
+@media(max-width:640px){
+  body{padding:14px}
+  .stats{gap:10px}
+  .stat{padding:12px 16px;min-width:calc(50% - 10px)}
+  .stat .num{font-size:22px}
+  table{font-size:12px}
+  th,td{padding:8px 10px}
+  .entry-text{max-width:140px}
+  .toolbar input{min-width:120px}
+  .nav{gap:4px}
+  .nav a,.nav-home{padding:5px 10px;font-size:11px}
+}
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>记忆管理 <span id="ollamaStatus"></span></h1>
+  <div class="nav">
+    <a href="/" class="nav-home">REM</a>
+    <a href="/memory" class="active">记忆管理</a>
+    <a href="/tools">工具箱</a>
+    <a href="/skills">技能库</a>
+    <a href="/tasks">任务管理</a>
+    <a href="/learning">学习日志</a>
+  </div>
 
-  <div class="stats" id="stats">
-    <div class="stat-card"><div class="num" id="totalEntries">-</div><div class="label">记忆条目</div></div>
-    <div class="stat-card"><div class="num" id="vectorCount">-</div><div class="label">向量化</div></div>
-    <div class="stat-card"><div class="num" id="keywordCount">-</div><div class="label">关键词</div></div>
+  <h1>记忆管理 <span id="ollamaStatus" style="font-size:13px;font-weight:400;color:var(--text2)"></span></h1>
+  <div class="sub">管理 agent 的记忆存储和向量检索</div>
+
+  <div class="stats">
+    <div class="stat"><div class="num" id="totalEntries">-</div><div class="label">记忆条目</div></div>
+    <div class="stat"><div class="num" id="vectorCount">-</div><div class="label">向量化</div></div>
+    <div class="stat"><div class="num" id="keywordCount">-</div><div class="label">关键词</div></div>
   </div>
 
   <div class="toolbar">
@@ -74,7 +105,7 @@
     <button class="btn btn-primary" onclick="rebuildVectors()">重建向量</button>
   </div>
 
-  <table id="memTable">
+  <table>
     <thead><tr><th style="width:28%">指令</th><th>步骤</th><th>结果</th><th style="width:50px">命中</th><th style="width:60px">向量</th><th style="width:70px">操作</th></tr></thead>
     <tbody id="memBody"></tbody>
   </table>
@@ -117,15 +148,12 @@ async function search() {
     const plan = r.plan || [];
     const stepResults = r.step_results || [];
     const hasSteps = plan.length > 0;
-
-    // Build step detail HTML
     let stepsHtml = '<span class="step-summary" onclick="toggleSteps(\'' + r.id + '\')">' + plan.length + ' 步';
     if (stepResults.length > 0) {
       const okCount = stepResults.filter(s => !s.error).length;
       stepsHtml += ' (' + okCount + '/' + stepResults.length + ' 成功)';
     }
     stepsHtml += ' &#9654;</span>';
-
     stepsHtml += '<div class="step-detail" id="steps-' + r.id + '">';
     if (stepResults.length > 0) {
       stepResults.forEach(function(s, i) {
@@ -151,14 +179,12 @@ async function search() {
       });
     }
     stepsHtml += '</div>';
-
     const resultTag = r.result === '成功'
       ? '<span class="tag tag-ok">成功</span>'
       : '<span class="tag tag-fail">' + esc(r.result) + '</span>';
-
     return '<tr>' +
       '<td class="entry-text" title="' + esc(r.user_input) + '">' + esc(r.user_input) + '</td>' +
-      '<td style="font-size:12px">' + (hasSteps ? stepsHtml : '<span style="color:#aeaeb2">-</span>') + '</td>' +
+      '<td style="font-size:12px">' + (hasSteps ? stepsHtml : '<span style="color:var(--text3)">-</span>') + '</td>' +
       '<td>' + resultTag + '</td>' +
       '<td>' + (r.hit_count || 0) + '</td>' +
       '<td>' + (r.has_vector ? '<span class="tag tag-ok">是</span>' : '<span class="tag">否</span>') + '</td>' +

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Big Agent</title>
+<title>REM</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -123,6 +123,7 @@ body::before{
   color:var(--text-secondary);cursor:pointer;font-size:13px;
   font-family:var(--font-body);transition:all .2s;
 }
+.pb{position:relative}
 .pb:hover{border-color:var(--accent);color:var(--text);background:var(--accent-glow)}
 .pb.now{
   border-color:var(--accent);background:var(--accent-glow);color:var(--accent);
@@ -487,8 +488,8 @@ body::before{
   <!-- ===== 侧边栏 ===== -->
   <div id="sidebar">
     <div class="sidebar-header">
-      <h1>Big Agent</h1>
-      <div class="sub">自学型 · 电脑控制智能体</div>
+      <h1>REM</h1>
+      <div class="sub">Reforge · Evolvere · Mimir</div>
     </div>
 
     <div class="sec">
@@ -514,6 +515,9 @@ body::before{
     <div class="sec">
       <div class="sec-title">管理</div>
       <a href="/memory" style="text-decoration:none"><button class="pb">记忆管理</button></a>
+      <a href="/tools" style="text-decoration:none"><button class="pb">工具箱</button></a>
+      <a href="/skills" style="text-decoration:none"><button class="pb">技能库</button></a>
+      <a href="/tasks" style="text-decoration:none"><button class="pb">任务管理</button></a>
       <a href="/learning" style="text-decoration:none"><button class="pb">学习日志</button></a>
     </div>
 
@@ -538,7 +542,7 @@ body::before{
 
     <div id="messages">
       <div class="msg sys">
-        你好，我是 <strong>Big Agent</strong> — 一个自学型的电脑控制智能体。
+        你好，我是 <strong>REM</strong> — Reforge, Evolvere, Mimir。一个自我进化的 AI 智能体。
         直接说你想干什么，我来拆解执行。
       </div>
     </div>

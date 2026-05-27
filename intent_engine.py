@@ -254,6 +254,19 @@ async def execute_plan(
                 "error": str(last_error)[:500],
             }
 
+            # 记录失败到技能缺口分析
+            try:
+                from skill_gap import record_failure
+                record_failure(
+                    user_input=user_input,
+                    error=str(last_error)[:500],
+                    failed_action=action,
+                    context=desc,
+                    source="intent",
+                )
+            except Exception:
+                pass
+
             replan = await _replan_remaining_steps(
                 user_input=user_input,
                 failed_step=i + 1,
@@ -392,6 +405,124 @@ async def _replan_remaining_steps(
 
     new_plan = _parse_plan(llm_output)
     return new_plan
+
+
+# ========== 结果验证（P4） ==========
+
+_VALIDATE_PROMPT = """你是一个执行结果验证器。判断一系列工具执行是否达成了用户的原始目标。
+
+用户指令：{user_input}
+
+执行方案：
+{plan_summary}
+
+执行结果：
+{results_summary}
+
+请评估：
+1. 每个关键步骤是否成功完成
+2. 整体目标是否达成
+3. 是否有遗漏或需要补充的步骤
+
+输出严格 JSON：
+{{
+  "passed": true/false,
+  "score": 0-100（达成度百分比）,
+  "step_checks": [
+    {{"step": 1, "action": "xxx", "ok": true/false, "note": "简要说明"}}
+  ],
+  "summary": "一句话总结",
+  "fix_suggestions": ["如果未通过，建议的修复步骤（可选）"]
+}}
+
+只输出 JSON，不要其他文字。"""
+
+
+async def validate_result(
+    user_input: str,
+    plan: list[dict],
+    step_results: list[dict],
+) -> dict:
+    """
+    验证执行结果是否达成了用户目标。
+
+    返回：
+      {
+        "passed": bool,
+        "score": 0-100,
+        "step_checks": [...],
+        "summary": str,
+        "fix_suggestions": [...]
+      }
+    """
+    # 构建方案摘要
+    plan_lines = []
+    for i, step in enumerate(plan):
+        plan_lines.append(f"  {i+1}. {step.get('action','')}: {step.get('description','')}")
+    plan_summary = "\n".join(plan_lines)
+
+    # 构建结果摘要
+    result_lines = []
+    for sr in step_results:
+        step_num = sr.get("step", "?")
+        action = sr.get("action", "")
+        if "error" in sr:
+            result_lines.append(f"  Step {step_num} ({action}): FAILED - {sr['error'][:200]}")
+        else:
+            r = sr.get("result", {})
+            summary = str(r)[:300] if isinstance(r, dict) else str(r)[:300]
+            result_lines.append(f"  Step {step_num} ({action}): OK - {summary}")
+    results_summary = "\n".join(result_lines)
+
+    prompt = _VALIDATE_PROMPT.format(
+        user_input=user_input,
+        plan_summary=plan_summary,
+        results_summary=results_summary,
+    )
+
+    llm_output = _call_llm(
+        "你是一个严格的执行结果验证器。",
+        prompt,
+        temperature=0.1,
+    )
+
+    if not llm_output:
+        return {"passed": False, "score": 0, "summary": "验证器无响应", "step_checks": [], "fix_suggestions": []}
+
+    # 解析 JSON
+    text = llm_output.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if len(lines) >= 3:
+            text = "\n".join(lines[1:-1])
+
+    try:
+        result = json.loads(text)
+        return {
+            "passed": result.get("passed", False),
+            "score": result.get("score", 0),
+            "step_checks": result.get("step_checks", []),
+            "summary": result.get("summary", ""),
+            "fix_suggestions": result.get("fix_suggestions", []),
+        }
+    except json.JSONDecodeError:
+        # 尝试从文本中提取 JSON
+        import re
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            try:
+                result = json.loads(match.group())
+                return {
+                    "passed": result.get("passed", False),
+                    "score": result.get("score", 0),
+                    "step_checks": result.get("step_checks", []),
+                    "summary": result.get("summary", ""),
+                    "fix_suggestions": result.get("fix_suggestions", []),
+                }
+            except json.JSONDecodeError:
+                pass
+
+    return {"passed": False, "score": 0, "summary": "验证结果解析失败", "step_checks": [], "fix_suggestions": []}
 
 
 # 常见错误的关键词，命中后触发自动修复
@@ -739,7 +870,87 @@ async def process(
             pass  # 重试中，不标记失败（最终成功不算失败）
         yield event
 
-    # 2c. 询问用户确认后再保存
+    # 2c. 结果验证
+    validation = await validate_result(user_input, plan, step_results)
+    yield {
+        "type": "validation",
+        "passed": validation["passed"],
+        "score": validation["score"],
+        "summary": validation["summary"],
+        "step_checks": validation["step_checks"],
+        "fix_suggestions": validation.get("fix_suggestions", []),
+    }
+
+    # 如果验证未通过且有修复建议，尝试自动修复
+    if not validation["passed"] and validation.get("fix_suggestions"):
+        fix_suggestions = validation["fix_suggestions"]
+        yield {
+            "type": "auto_fix_attempt",
+            "reason": validation["summary"],
+            "fix_count": len(fix_suggestions),
+        }
+
+        # 将修复建议作为新方案执行
+        fix_plan = []
+        for i, suggestion in enumerate(fix_suggestions[:5]):
+            fix_plan.append({
+                "step": i + 1,
+                "action": "execute_python",
+                "args": {"code": f"# 修复建议: {suggestion}\nprint('TODO: implement fix')"},
+                "description": f"修复: {suggestion}",
+            })
+
+        # 用 LLM 将修复建议转为可执行步骤
+        fix_prompt = f"""用户指令：{user_input}
+
+执行失败原因：{validation['summary']}
+
+修复建议：
+{chr(10).join(f'- {s}' for s in fix_suggestions)}
+
+请将修复建议转为可执行的步骤（JSON 数组格式）。
+只输出 JSON 数组。"""
+
+        fix_text = _call_llm("你是执行方案修复器。", fix_prompt, temperature=0.1)
+        fix_plan = _parse_plan(fix_text)
+
+        if fix_plan:
+            yield {
+                "type": "fix_plan_generated",
+                "plan": fix_plan,
+                "steps_count": len(fix_plan),
+            }
+
+            fix_results = []
+            async for event in execute_plan(fix_plan, user_input=user_input):
+                if event["type"] == "step_result":
+                    fix_results.append({
+                        "step": event["step"],
+                        "action": event["action"],
+                        "result": event["result"],
+                    })
+                elif event["type"] == "step_failed":
+                    fix_results.append({
+                        "step": event["step"],
+                        "action": event["action"],
+                        "error": event["error"],
+                    })
+                yield event
+
+            # 合并结果
+            step_results.extend(fix_results)
+            # 重新验证
+            revalidation = await validate_result(user_input, plan + fix_plan, step_results)
+            yield {
+                "type": "revalidation",
+                "passed": revalidation["passed"],
+                "score": revalidation["score"],
+                "summary": revalidation["summary"],
+            }
+            if revalidation["passed"]:
+                had_failure = False
+
+    # 2d. 询问用户确认后再保存
     import uuid as _uuid
     pending_id = str(_uuid.uuid4())[:8]
     result_summary = "成功" if not had_failure else "部分完成（有步骤失败）"

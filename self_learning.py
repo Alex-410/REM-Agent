@@ -378,11 +378,41 @@ class SelfLearningEngine:
                     self._save_state()
 
                     print(f"[SelfLearning] 安装技能: {name} ({full_name}) [{used_path}]")
+
+                    # 安装后验证技能
+                    await self._validate_skill_async(name)
+
                     return True
 
         # 安装失败，清理空目录
         self._cleanup_empty_dir(target_dir)
         return False
+
+    async def _validate_skill_async(self, skill_name: str):
+        """异步验证技能"""
+        try:
+            from skill_validator import validate_skill
+            import asyncio
+
+            # 在后台线程中执行验证（避免阻塞）
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, validate_skill, skill_name)
+
+            if result.get("verified"):
+                print(f"[SelfLearning] 技能验证通过: {skill_name}")
+            else:
+                print(f"[SelfLearning] 技能验证失败: {skill_name} - {result.get('error', '')}")
+
+            self._log_learning_event({
+                "type": "validate",
+                "name": skill_name,
+                "verified": result.get("verified", False),
+                "test_case": result.get("test_case", ""),
+                "error": result.get("error", ""),
+            })
+
+        except Exception as e:
+            print(f"[SelfLearning] 技能验证异常 ({skill_name}): {e}")
 
     def _cleanup_empty_dir(self, directory: str):
         """清理空目录"""
@@ -452,16 +482,28 @@ class SelfLearningEngine:
     # ========== 自学并生成技能 ==========
 
     def _identify_gaps(self) -> list[str]:
-        """识别知识缺口：当前技能没覆盖到的常见领域"""
+        """识别知识缺口：基于失败记录动态分析 + 静态常见领域"""
         known_skills = {s["name"] for s in self.manifest["skills"]}
-        # 如果这些领域没有对应技能，就标记为缺口
-        common_gaps = [
+        already_learned = set(self.state.get("learned_topics", []))
+
+        # 动态缺口：从失败记录中分析
+        dynamic_gaps = []
+        try:
+            from skill_gap import recommend_skills_for_gaps
+            dynamic_gaps = recommend_skills_for_gaps()
+        except Exception:
+            pass
+
+        # 静态缺口：常见领域兜底
+        static_gaps = [
             "web-scraping", "data-analysis", "image-processing",
             "api-development", "database-operations", "devops-automation",
             "natural-language-processing", "time-series-analysis",
         ]
-        already_learned = set(self.state.get("learned_topics", []))
-        return [g for g in common_gaps if g not in known_skills and g not in already_learned]
+
+        # 合并：动态优先，静态补充
+        all_gaps = dynamic_gaps + [g for g in static_gaps if g not in dynamic_gaps]
+        return [g for g in all_gaps if g not in known_skills and g not in already_learned]
 
     async def _research_and_generate_skill(self, topic: str) -> dict | None:
         """搜索一个主题，综合信息并生成 SKILL.md"""
@@ -533,6 +575,10 @@ class SelfLearningEngine:
         })
 
         print(f"[SelfLearning] 自学完成: {topic}")
+
+        # 自学完成后验证技能
+        await self._validate_skill_async(topic)
+
         return {"topic": topic, "description": desc}
 
     # ========== 质量评分 + 分级 ==========

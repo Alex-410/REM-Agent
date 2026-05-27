@@ -208,7 +208,7 @@ class OverlayWindow(QWidget):
         self._dragging = False  # 拖拽状态
 
     def _init_ui(self):
-        self.setWindowTitle("Big Agent")
+        self.setWindowTitle("REM")
         self.setWindowFlags(
             Qt.WindowStaysOnTopHint
             | Qt.FramelessWindowHint
@@ -237,7 +237,7 @@ class OverlayWindow(QWidget):
 
         # 标题栏
         title_row = QHBoxLayout()
-        title = QLabel("Big Agent")
+        title = QLabel("REM")
         title.setStyleSheet("color: #888; font-size: 11px; background: transparent;")
         self.status_icon = QLabel("●")
         self.status_icon.setStyleSheet("color: #4ade80; font-size: 10px; background: transparent;")

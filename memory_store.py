@@ -157,7 +157,14 @@ def _load_vector(entry_id: str) -> list[float] | None:
 # ========== 核心 API ==========
 
 
-def save(user_input: str, plan: list, result: str, tags: list[str] | None = None, step_results: list[dict] | None = None) -> str:
+def save(user_input: str, plan: list, result: str, tags: list[str] | None = None, step_results: list[dict] | None = None, entry_type: str = "success", extra: dict | None = None) -> str:
+    """
+    保存一条记忆。
+
+    参数：
+      entry_type: "success" / "failure" / "knowledge" / "session" / "observation"
+      extra: 类型特定的额外字段（如 observation 的 strength/dimension）
+    """
     _ensure_dirs()
     entry_id = _compute_id(user_input)
     keywords = _extract_keywords(user_input)
@@ -178,6 +185,7 @@ def save(user_input: str, plan: list, result: str, tags: list[str] | None = None
     now = time.time()
     entry = {
         "id": entry_id,
+        "type": entry_type,
         "user_input": user_input,
         "plan": plan,
         "step_results": step_results or [],
@@ -188,6 +196,16 @@ def save(user_input: str, plan: list, result: str, tags: list[str] | None = None
         "hit_count": 0,
         "has_vector": False,
     }
+
+    # observation 类型特有字段
+    if entry_type == "observation":
+        entry["strength"] = extra.get("strength", 3) if extra else 3
+        entry["dimension"] = extra.get("dimension", "") if extra else ""
+        entry["observation"] = extra.get("observation", "") if extra else ""
+
+    # 其他类型特有字段
+    if extra:
+        entry.update(extra)
 
     with open(_entry_path(entry_id), "w", encoding="utf-8") as f:
         json.dump(entry, f, ensure_ascii=False, indent=2)
@@ -220,6 +238,23 @@ def save(user_input: str, plan: list, result: str, tags: list[str] | None = None
 
     _save_index(index)
     return entry_id
+
+
+def save_observation(dimension: str, value: str, context: str, strength: int = 3) -> str:
+    """保存一条观察"""
+    return save(
+        user_input=f"{dimension}:{value}",
+        plan=[],
+        result=context[:200],
+        tags=["observation", dimension],
+        step_results=[],
+        entry_type="observation",
+        extra={
+            "strength": strength,
+            "dimension": dimension,
+            "observation": value,
+        },
+    )
 
 
 def _sync_vector_async(entry_id: str, text: str):

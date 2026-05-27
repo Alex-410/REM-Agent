@@ -20,6 +20,18 @@ from tools.windows_control import (
 )
 from tools.wechat_send import send_text as wechat_send_text, send_file as wechat_send_file
 
+# 共享单例 — agent.py 和 intent_engine.py 共用同一个 registry
+_shared_registry: ToolRegistry | None = None
+
+
+def get_registry() -> ToolRegistry:
+    """返回共享的 ToolRegistry 单例，首次调用时自动注册所有工具"""
+    global _shared_registry
+    if _shared_registry is None:
+        _shared_registry = ToolRegistry()
+        register_all_tools(_shared_registry)
+    return _shared_registry
+
 
 def register_all_tools(registry: ToolRegistry):
     # --- Web tools ---
@@ -629,4 +641,298 @@ def register_all_tools(registry: ToolRegistry):
             "required": ["target"]
         },
         click_text_on_screen
+    )
+
+    # --- 自我修改安全引擎 ---
+    _self_mod_instance = None
+
+    def _self_mod_start(description: str) -> dict:
+        """启动自我修改流程：创建安全分支 self-mod/{timestamp}"""
+        nonlocal _self_mod_instance
+        if _self_mod_instance and _self_mod_instance.started:
+            return {"error": f"已有进行中的自我修改: {_self_mod_instance.branch_name}，请先 commit 或 rollback"}
+        from self_modifier import SelfModifier
+        mod = SelfModifier(description)
+        result = mod.start()
+        if result.get("success"):
+            _self_mod_instance = mod
+        return result
+
+    def _self_mod_verify(file_path: str) -> dict:
+        """验证修改后的文件：语法检查 + import 测试"""
+        nonlocal _self_mod_instance
+        if not _self_mod_instance or not _self_mod_instance.started:
+            return {"error": "没有进行中的自我修改流程，请先调用 self_mod_start"}
+        return _self_mod_instance.verify(file_path)
+
+    def _self_mod_commit(message: str) -> dict:
+        """提交修改并合并回原分支，记录到 memory"""
+        nonlocal _self_mod_instance
+        if not _self_mod_instance or not _self_mod_instance.started:
+            return {"error": "没有进行中的自我修改流程"}
+        result = _self_mod_instance.commit(message)
+        if result.get("success"):
+            _self_mod_instance = None
+        return result
+
+    def _self_mod_rollback(reason: str = "") -> dict:
+        """回滚修改，切回原分支"""
+        nonlocal _self_mod_instance
+        if not _self_mod_instance or not _self_mod_instance.started:
+            return {"error": "没有进行中的自我修改流程"}
+        result = _self_mod_instance.rollback(reason)
+        _self_mod_instance = None
+        return result
+
+    def _self_mod_status() -> dict:
+        """获取当前自我修改状态"""
+        nonlocal _self_mod_instance
+        if _self_mod_instance and _self_mod_instance.started:
+            return {
+                "active": True,
+                "branch": _self_mod_instance.branch_name,
+                "description": _self_mod_instance.description,
+                "modified_files": _self_mod_instance.modified_files,
+            }
+        return {"active": False}
+
+    registry.register(
+        "self_mod_start",
+        "【自我修改】启动安全修改流程。创建 git 分支 self-mod/{timestamp}，之后的所有文件修改都在此分支上进行。必须在 write_file 修改自己代码之前调用。",
+        {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "本次修改的描述，如「优化 memory_store 搜索算法」"}
+            },
+            "required": ["description"]
+        },
+        _self_mod_start
+    )
+
+    registry.register(
+        "self_mod_verify",
+        "【自我修改】验证修改后的文件。检查 Python 语法和 import 是否正常。在 write_file 修改代码后、commit 之前调用。返回每项检查的通过/失败状态。",
+        {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "修改后的文件路径，如 memory_store.py"}
+            },
+            "required": ["file_path"]
+        },
+        _self_mod_verify
+    )
+
+    registry.register(
+        "self_mod_commit",
+        "【自我修改】验证通过后提交修改。将安全分支合并回 master，删除临时分支，记录成功到 memory。失败会自动回滚。",
+        {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "提交说明，如「优化搜索算法: 提升检索精度」"}
+            },
+            "required": ["message"]
+        },
+        _self_mod_commit
+    )
+
+    registry.register(
+        "self_mod_rollback",
+        "【自我修改】回滚所有修改。放弃安全分支上的所有改动，切回 master。验证失败时自动调用，也可手动调用。",
+        {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "回滚原因（可选）", "default": ""}
+            }
+        },
+        _self_mod_rollback
+    )
+
+    registry.register(
+        "self_mod_status",
+        "【自我修改】查看当前是否有进行中的自我修改流程。",
+        {"type": "object", "properties": {}},
+        _self_mod_status
+    )
+
+    # --- 桌面操作序列回放 ---
+    def _replay_start(name: str) -> dict:
+        """开始录制桌面操作序列"""
+        from desktop_replay import start_recording
+        return start_recording(name)
+
+    def _replay_stop(save: bool = True) -> dict:
+        """停止录制并保存"""
+        from desktop_replay import stop_recording
+        return stop_recording(save=save)
+
+    def _replay_list() -> dict:
+        """列出所有录制的操作序列"""
+        from desktop_replay import list_sequences
+        return list_sequences()
+
+    def _replay_run(name: str, speed: float = 1.0, dry_run: bool = False) -> dict:
+        """回放一个录制的操作序列。speed=回放速度倍数，dry_run=只预览不执行"""
+        from desktop_replay import replay_sync
+        return replay_sync(name, speed=speed, dry_run=dry_run)
+
+    def _replay_delete(name: str) -> dict:
+        """删除一个录制的操作序列"""
+        from desktop_replay import delete_sequence
+        return delete_sequence(name)
+
+    def _replay_status() -> dict:
+        """查看当前录制状态"""
+        from desktop_replay import get_recording_status
+        return get_recording_status()
+
+    registry.register(
+        "replay_start",
+        "【操作回放】开始录制桌面操作。之后的鼠标、键盘、窗口操作会被记录到序列中。",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "序列名称，如 '打开记事本输入文字'"}
+            },
+            "required": ["name"]
+        },
+        _replay_start
+    )
+
+    registry.register(
+        "replay_stop",
+        "【操作回放】停止录制并保存序列。",
+        {
+            "type": "object",
+            "properties": {
+                "save": {"type": "boolean", "description": "是否保存录制", "default": True}
+            }
+        },
+        _replay_stop
+    )
+
+    registry.register(
+        "replay_list",
+        "【操作回放】列出所有已录制的操作序列。",
+        {"type": "object", "properties": {}},
+        _replay_list
+    )
+
+    registry.register(
+        "replay_run",
+        "【操作回放】回放一个录制的操作序列。支持调节速度和预览模式。",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "序列名称"},
+                "speed": {"type": "number", "description": "回放速度倍数（1.0=原速，2.0=2倍速）", "default": 1.0},
+                "dry_run": {"type": "boolean", "description": "预览模式：只显示步骤不执行", "default": False},
+            },
+            "required": ["name"]
+        },
+        _replay_run
+    )
+
+    registry.register(
+        "replay_delete",
+        "【操作回放】删除一个已录制的操作序列。",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "序列名称"}
+            },
+            "required": ["name"]
+        },
+        _replay_delete
+    )
+
+    registry.register(
+        "replay_status",
+        "【操作回放】查看当前录制状态。",
+        {"type": "object", "properties": {}},
+        _replay_status
+    )
+
+    # --- P0: 自修改安全引擎 ---
+    def _safety_check(command: str = "", filepath: str = "", operation: str = "") -> dict:
+        """综合安全检查：检测危险命令、受保护文件操作"""
+        from self_modify_safety import full_safety_check
+        return full_safety_check(command=command, filepath=filepath, operation=operation)
+
+    def _safety_snapshot(files: list[str] | None = None) -> dict:
+        """创建核心文件快照，用于回滚"""
+        from self_modify_safety import create_snapshot
+        snap_id = create_snapshot(files)
+        return {"snapshot_id": snap_id, "message": f"快照已创建: {snap_id}"}
+
+    def _safety_restore(snapshot_id: str) -> dict:
+        """从快照恢复核心文件"""
+        from self_modify_safety import restore_snapshot
+        return restore_snapshot(snapshot_id)
+
+    def _safety_snapshots() -> dict:
+        """列出所有安全快照"""
+        from self_modify_safety import list_snapshots
+        return {"snapshots": list_snapshots()}
+
+    def _safety_audit(limit: int = 50) -> dict:
+        """查看安全审计日志"""
+        from self_modify_safety import get_audit_log
+        return {"logs": get_audit_log(limit)}
+
+    registry.register(
+        "safety_check",
+        "【安全引擎】综合安全检查：检测危险 shell 命令、受保护文件操作、危险代码模式。在执行高风险操作前调用。",
+        {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "要检查的 shell 命令（可选）", "default": ""},
+                "filepath": {"type": "string", "description": "要操作的文件路径（可选）", "default": ""},
+                "operation": {"type": "string", "description": "操作类型：delete/overwrite（可选）", "default": ""},
+            }
+        },
+        _safety_check
+    )
+
+    registry.register(
+        "safety_snapshot",
+        "【安全引擎】创建核心文件快照。修改自己代码前调用，以便出错时回滚。",
+        {
+            "type": "object",
+            "properties": {
+                "files": {"type": "array", "items": {"type": "string"}, "description": "要快照的文件列表（可选，默认核心文件）"}
+            }
+        },
+        _safety_snapshot
+    )
+
+    registry.register(
+        "safety_restore",
+        "【安全引擎】从快照恢复核心文件。修改出错时一键回退。",
+        {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {"type": "string", "description": "快照 ID"}
+            },
+            "required": ["snapshot_id"]
+        },
+        _safety_restore
+    )
+
+    registry.register(
+        "safety_snapshots",
+        "【安全引擎】列出所有安全快照。",
+        {"type": "object", "properties": {}},
+        _safety_snapshots
+    )
+
+    registry.register(
+        "safety_audit",
+        "【安全引擎】查看安全审计日志：拦截记录、检查历史。",
+        {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "返回条数", "default": 50}
+            }
+        },
+        _safety_audit
     )

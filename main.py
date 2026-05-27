@@ -17,7 +17,7 @@ from workflow_state import WorkflowManager
 from self_learning import SelfLearningEngine
 from task_manager import get_task_manager, Task, TaskStatus
 
-app = FastAPI(title="Big Agent — Skill-Aware AI Engineering Agent")
+app = FastAPI(title="REM — Reforge, Evolvere, Mimir")
 
 # 自学引擎（启动后自动在后台学新技能）
 self_learning = SelfLearningEngine()
@@ -77,6 +77,18 @@ async def memory_page():
 @app.get("/learning")
 async def learning_page():
     return FileResponse("static/learning.html")
+
+@app.get("/tools")
+async def tools_page():
+    return FileResponse("static/tools.html")
+
+@app.get("/skills")
+async def skills_page():
+    return FileResponse("static/skills.html")
+
+@app.get("/tasks")
+async def tasks_page():
+    return FileResponse("static/tasks.html")
 
 
 # --- Tool info ---
@@ -144,6 +156,31 @@ async def skill_inventory():
 async def skill_summary():
     """简版技能列表，方便快速查看"""
     return {"skills": self_learning.get_skills_summary()}
+
+
+@app.get("/api/skills/validation")
+async def skill_validation_summary():
+    """技能验证摘要"""
+    from skill_validator import get_validation_summary
+    return get_validation_summary()
+
+
+@app.post("/api/skills/validate")
+async def validate_skill(skill_name: str = ""):
+    """验证指定技能"""
+    from skill_validator import validate_skill as do_validate
+    if not skill_name:
+        return {"error": "请提供技能名称"}
+    result = do_validate(skill_name)
+    return result
+
+
+@app.post("/api/skills/validate-all")
+async def validate_all_skills():
+    """验证所有未验证的技能"""
+    from skill_validator import validate_all_unverified
+    result = validate_all_unverified()
+    return result
 
 
 @app.post("/api/learn")
@@ -347,6 +384,14 @@ async def chat(req: ChatRequest):
             wf.set_skill(best.name)
             # Set goal from user message
             wf.set_goal(user_message[:200])
+        else:
+            # 记录无匹配技能的请求（供缺口分析）
+            try:
+                from skill_gap import record_unmatched_request
+                all_skills = skill_engine.get_all_skills()
+                record_unmatched_request(user_message, [s.name for s in all_skills])
+            except Exception:
+                pass
 
     # Store user message
     conversations[conv_id].append({"role": "user", "content": user_message})
@@ -443,6 +488,30 @@ async def confirm_memory(req: MemoryConfirmRequest):
     return do_confirm(req.pending_id, confirmed=req.confirmed)
 
 
+# --- Skill Gap Analysis ---
+
+@app.get("/api/skills/gaps")
+async def skill_gaps():
+    """技能缺口分析：哪些能力缺失、失败频率、学习推荐"""
+    from skill_gap import get_gap_stats
+    return get_gap_stats()
+
+
+@app.get("/api/skills/gaps/analysis")
+async def skill_gap_analysis():
+    """详细的缺口分析报告"""
+    from skill_gap import analyze_gaps
+    return analyze_gaps()
+
+
+@app.post("/api/skills/gaps/analyze")
+async def mark_gaps_analyzed():
+    """标记所有失败记录为已分析"""
+    from skill_gap import mark_analyzed
+    mark_analyzed()
+    return {"success": True, "message": "所有失败记录已标记为已分析"}
+
+
 # --- Learning Log ---
 
 @app.get("/api/learning/log")
@@ -453,6 +522,46 @@ async def learning_log(limit: int = Query(50, description="返回条数")):
         "total": len(logs),
         "logs": logs,
     }
+
+
+# --- Desktop Replay ---
+
+@app.get("/api/replay/sequences")
+async def replay_list():
+    """列出所有录制的操作序列"""
+    from desktop_replay import list_sequences
+    return list_sequences()
+
+
+@app.get("/api/replay/status")
+async def replay_status():
+    """当前录制状态"""
+    from desktop_replay import get_recording_status
+    return get_recording_status()
+
+
+@app.get("/api/replay/{name}")
+async def replay_get(name: str):
+    """获取序列详情"""
+    from desktop_replay import get_sequence
+    seq = get_sequence(name)
+    if not seq:
+        return {"error": f"Sequence '{name}' not found"}, 404
+    return seq
+
+
+@app.post("/api/replay/{name}/run")
+async def replay_run(name: str, speed: float = 1.0, dry_run: bool = False):
+    """回放一个序列"""
+    from desktop_replay import replay
+    return await replay(name, speed=speed, dry_run=dry_run)
+
+
+@app.delete("/api/replay/{name}")
+async def replay_delete(name: str):
+    """删除一个序列"""
+    from desktop_replay import delete_sequence
+    return delete_sequence(name)
 
 
 @app.on_event("startup")

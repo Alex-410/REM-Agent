@@ -10,6 +10,8 @@ from tools.registry import ToolRegistry
 from skill_engine import SkillEngine, PHASE_ORDER, PHASE_LABELS, PHASE_EMOJIS
 from persona_manager import PersonaManager
 from workflow_state import WorkflowState
+from observation_engine import update_observations
+from adaptation_engine import get_adapted_system_prompt
 
 registry = ToolRegistry()
 register_all_tools(registry)
@@ -28,7 +30,7 @@ def build_system_prompt(wf: WorkflowState | None = None) -> str:
 
     # 1. Core identity
     if persona.name == "general":
-        sections.append("""You are an expert AI Software Engineering Agent. You have deep knowledge of the full software development lifecycle.
+        sections.append("""You are REM — Reforge, Evolvere, Mimir. A self-evolving AI agent with deep knowledge of the full software development lifecycle.
 
 CORE RULES:
 1. You have access to tools — use them proactively. When asked a question that requires up-to-date info, search the web.
@@ -100,8 +102,20 @@ async def run_agent(
         http_client=httpx.Client(trust_env=False),
     )
 
-    # Build and inject system prompt
+    # 处理用户消息中的观察反馈
+    for msg in messages:
+        if msg.get("role") == "user" and msg.get("content"):
+            try:
+                obs_result = update_observations(msg["content"])
+                if obs_result.get("actions"):
+                    yield {"type": "observation", "data": obs_result}
+            except Exception:
+                pass  # 观察处理失败不影响主流程
+
+    # Build and inject system prompt (with adaptation)
     system_prompt = build_system_prompt(wf)
+    system_prompt = get_adapted_system_prompt(system_prompt)
+
     if not messages or messages[0].get("role") != "system":
         messages.insert(0, {"role": "system", "content": system_prompt})
     else:
@@ -172,6 +186,35 @@ async def run_agent(
                 except Exception as tool_err:
                     result = {"error": str(tool_err)}
                 result_str = json.dumps(result, ensure_ascii=False, default=str)
+
+                # 记录工具调用失败（供技能缺口分析）
+                if isinstance(result, dict) and result.get("error"):
+                    try:
+                        from skill_gap import record_failure
+                        record_failure(
+                            user_input=str(args)[:200],
+                            error=result["error"],
+                            failed_action=tc.function.name,
+                            source="agent",
+                        )
+                    except Exception:
+                        pass
+
+                # 自动录制桌面操作（录制模式激活时）
+                try:
+                    from desktop_replay import get_recording_status, record_step
+                    _RECORDER_TOOLS = {
+                        "mouse_click", "mouse_move", "mouse_double_click",
+                        "mouse_right_click", "mouse_drag", "mouse_scroll",
+                        "keyboard_type", "keyboard_hotkey", "keyboard_press",
+                        "keyboard_write_enter", "process_launch", "process_kill",
+                        "window_activate", "window_close", "window_minimize",
+                        "click_text",
+                    }
+                    if get_recording_status().get("recording") and tc.function.name in _RECORDER_TOOLS:
+                        record_step(tc.function.name, args)
+                except Exception:
+                    pass  # 录制失败不影响主流程
 
                 if len(result_str) > config.MAX_TOOL_RESULT_LENGTH:
                     result_str = result_str[:config.MAX_TOOL_RESULT_LENGTH] + "..."

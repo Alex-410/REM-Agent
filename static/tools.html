@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工具箱 — REM</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f5f3ef;--surface:#fff;--border:#e2ddd6;--border-light:#f0eeea;
+  --text:#1a1a1e;--text2:#6b6560;--text3:#9c9590;
+  --accent:#d84a2a;--accent-hover:#bf3d20;--accent-glow:rgba(216,74,42,0.08);
+  --navy:#1e2c3a;--green:#2a9d6e;--red:#d94a4a;
+  --radius:12px;--radius-sm:8px;
+  --font:"DM Sans","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-display:"Syne","PingFang SC",sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono",monospace;
+}
+body{font-family:var(--font);background:var(--bg);color:var(--text);padding:20px}
+.container{max-width:960px;margin:0 auto}
+.nav{display:flex;align-items:center;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+.nav a{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border:1px solid var(--border);border-radius:20px;text-decoration:none;font-size:12px;color:var(--text2);transition:all .15s;background:var(--surface)}
+.nav a:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.nav a.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.nav-home{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--navy);text-decoration:none;padding:6px 14px;border:1px solid var(--border);border-radius:20px;transition:all .15s}
+.nav-home:hover{border-color:var(--accent);color:var(--accent)}
+h1{font-family:var(--font-display);font-size:22px;margin-bottom:4px;color:var(--navy)}
+.sub{color:var(--text3);font-size:12px;margin-bottom:24px}
+.stats{display:flex;gap:16px;margin-bottom:24px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;flex:1;text-align:center}
+.stat .num{font-size:28px;font-weight:700;color:var(--accent);font-family:var(--font-mono)}
+.stat .label{font-size:11px;color:var(--text3);margin-top:4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;transition:border-color .2s}
+.card:hover{border-color:var(--accent)}
+.card .name{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--navy)}
+.card .desc{font-size:12px;color:var(--text2);margin-top:6px;line-height:1.5}
+.card .params{margin-top:6px;font-size:10px;color:var(--text3)}
+.search{width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;margin-bottom:16px;outline:none;font-family:inherit;background:var(--surface)}
+.search:focus{border-color:var(--accent)}
+@media(max-width:640px){
+  body{padding:14px}
+  .stats{gap:10px}
+  .stat{padding:12px 16px}
+  .stat .num{font-size:22px}
+  .grid{grid-template-columns:1fr}
+  .nav{gap:4px}
+  .nav a,.nav-home{padding:5px 10px;font-size:11px}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="nav">
+    <a href="/" class="nav-home">REM</a>
+    <a href="/memory">记忆管理</a>
+    <a href="/tools" class="active">工具箱</a>
+    <a href="/skills">技能库</a>
+    <a href="/tasks">任务管理</a>
+    <a href="/learning">学习日志</a>
+  </div>
+
+  <h1>工具箱</h1>
+  <div class="sub">所有已注册的工具及其描述</div>
+  <div class="stats">
+    <div class="stat"><div class="num" id="total">-</div><div class="label">工具总数</div></div>
+  </div>
+  <input class="search" id="search" placeholder="搜索工具..." oninput="filter()">
+  <div class="grid" id="grid"></div>
+</div>
+<script>
+let allTools=[];
+fetch('/api/tools').then(r=>r.json()).then(d=>{
+  document.getElementById('total').textContent=d.count;
+  allTools=d.details||[];
+  render(allTools);
+});
+function render(tools){
+  document.getElementById('grid').innerHTML=tools.map(t=>{
+    const f=t.function;
+    const params=Object.keys(f.parameters?.properties||{});
+    return `<div class="card"><div class="name">${f.name}</div><div class="desc">${f.description}</div><div class="params">参数: ${params.length?params.join(', '):'无'}</div></div>`;
+  }).join('');
+}
+function filter(){
+  const q=document.getElementById('search').value.toLowerCase();
+  render(allTools.filter(t=>t.function.name.toLowerCase().includes(q)||(t.function.description||'').toLowerCase().includes(q)));
+}
+</script>
+</body>
+</html>
