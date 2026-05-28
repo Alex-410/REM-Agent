@@ -262,3 +262,142 @@ def rollback_to(commit_hash: str) -> dict:
     if ok:
         return {"success": True, "message": f"已回滚到 {commit_hash}"}
     return {"success": False, "message": f"回滚失败"}
+
+
+class SelfModifier:
+    """
+    安全自修改流程的状态机。
+
+    用法：
+      mod = SelfModifier("优化 memory_store 搜索算法")
+      mod.start()                    # 创建保护分支
+      mod.verify("memory_store.py")  # 验证修改
+      mod.commit("优化搜索算法")      # 提交并合并
+      # 或 mod.rollback("验证失败")   # 回滚
+    """
+
+    def __init__(self, description: str):
+        self.description = description
+        self.started = False
+        self.branch_name = ""
+        self.original_branch = ""
+        self.protect_hash = ""
+        self.modified_files: list[str] = []
+
+    def start(self) -> dict:
+        """启动修改流程：创建保护点"""
+        if self.started:
+            return {"success": False, "message": "已有进行中的修改流程"}
+
+        try:
+            # 记录当前分支
+            result = _git_exec(["branch", "--show-current"])
+            self.original_branch = result.stdout.strip() or "master"
+
+            # 创建保护点
+            self.protect_hash = git_protect(f"self-mod start: {self.description}")
+
+            # 创建安全分支
+            ts = int(time.time())
+            self.branch_name = f"self-mod/{ts}"
+            _git_exec(["checkout", "-b", self.branch_name])
+
+            self.started = True
+            return {
+                "success": True,
+                "message": f"已创建安全分支 {self.branch_name}",
+                "branch": self.branch_name,
+                "protect_hash": self.protect_hash,
+            }
+        except Exception as e:
+            return {"success": False, "message": f"启动失败: {e}"}
+
+    def verify(self, file_path: str) -> dict:
+        """验证修改后的文件"""
+        if not self.started:
+            return {"success": False, "message": "没有进行中的修改流程"}
+
+        abs_path = os.path.join(BASE_DIR, file_path)
+        if not os.path.isfile(abs_path):
+            return {"success": False, "message": f"文件不存在: {file_path}"}
+
+        checks = []
+
+        # Python 语法检查
+        if file_path.endswith(".py"):
+            ok, msg = _validate_python_syntax(abs_path)
+            checks.append({"check": "syntax", "passed": ok, "detail": msg})
+
+        # Import 检查
+        ok, msg = _validate_imports(abs_path)
+        checks.append({"check": "import", "passed": ok, "detail": msg})
+
+        # 基本功能测试
+        ok, msg = _run_basic_tests()
+        checks.append({"check": "basic_tests", "passed": ok, "detail": msg})
+
+        all_passed = all(c["passed"] for c in checks)
+
+        if file_path not in self.modified_files:
+            self.modified_files.append(file_path)
+
+        return {
+            "success": all_passed,
+            "checks": checks,
+            "message": "验证通过" if all_passed else "验证失败",
+        }
+
+    def commit(self, message: str) -> dict:
+        """提交修改并合并回原分支"""
+        if not self.started:
+            return {"success": False, "message": "没有进行中的修改流程"}
+
+        try:
+            # 提交
+            ok = git_commit_changes(message)
+            if not ok:
+                return {"success": False, "message": "提交失败，可能没有修改"}
+
+            # 切回原分支并合并
+            _git_exec(["checkout", self.original_branch])
+            _git_exec(["merge", self.branch_name, "--no-ff", "-m", f"[REM-self-mod] {message}"])
+
+            # 删除安全分支
+            _git_exec(["branch", "-D", self.branch_name], check=False)
+
+            self.started = False
+            return {
+                "success": True,
+                "message": f"已提交并合并到 {self.original_branch}",
+                "branch": self.original_branch,
+                "modified_files": self.modified_files,
+            }
+        except Exception as e:
+            # 合并失败，尝试回滚
+            self.rollback(f"合并失败: {e}")
+            return {"success": False, "message": f"合并失败，已回滚: {e}"}
+
+    def rollback(self, reason: str = "") -> dict:
+        """回滚所有修改"""
+        if not self.started:
+            return {"success": False, "message": "没有进行中的修改流程"}
+
+        try:
+            # 切回原分支
+            _git_exec(["checkout", self.original_branch], check=False)
+
+            # 回滚到保护点
+            if self.protect_hash:
+                git_rollback(self.protect_hash)
+
+            # 删除安全分支
+            _git_exec(["branch", "-D", self.branch_name], check=False)
+
+            self.started = False
+            return {
+                "success": True,
+                "message": f"已回滚到 {self.protect_hash[:7]}",
+                "reason": reason,
+            }
+        except Exception as e:
+            return {"success": False, "message": f"回滚异常: {e}"}

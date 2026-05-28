@@ -804,7 +804,33 @@ class SelfLearningEngine:
         # 形式验证
         await self._validate_skill_async(topic)
 
-        return {"topic": topic, "description": desc, "practice_verified": practice_result.get("verified", False)}
+        # 代码集成：分析技能是否需要新工具或修改现有代码
+        integration_result = {"integrated": False, "type": "none", "message": "跳过"}
+        try:
+            from skill_integrator import SkillIntegrator
+            integrator = SkillIntegrator()
+            integration_result = await integrator.auto_integrate(topic)
+            if integration_result.get("integrated"):
+                print(f"[SelfLearning] 代码集成成功: {topic} -> {integration_result.get('type')}")
+                self._log_learning_event({
+                    "type": "code_integration",
+                    "name": topic,
+                    "integrated": True,
+                    "integration_type": integration_result.get("type", ""),
+                    "message": integration_result.get("message", ""),
+                })
+            else:
+                print(f"[SelfLearning] 无需代码集成: {topic} - {integration_result.get('message', '')}")
+        except Exception as e:
+            print(f"[SelfLearning] 代码集成异常: {topic} - {e}")
+            integration_result = {"integrated": False, "type": "error", "message": str(e)}
+
+        return {
+            "topic": topic,
+            "description": desc,
+            "practice_verified": practice_result.get("verified", False),
+            "integration": integration_result,
+        }
 
     # ========== 质量评分 + 分级 ==========
 
