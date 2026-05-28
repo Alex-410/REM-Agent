@@ -104,6 +104,61 @@ async def list_tools():
     }
 
 
+@app.get("/api/models/health")
+async def model_health():
+    """查看模型健康状态和 fallback 链"""
+    from llm_client import get_health_status
+    return get_health_status()
+
+
+@app.post("/api/models/reset")
+async def reset_model_health():
+    """重置模型健康状态（手动恢复）"""
+    from llm_client import reset_health
+    reset_health()
+    return {"success": True, "message": "模型健康状态已重置"}
+
+
+# --- Self-Modifier APIs ---
+
+class ModifyRequest(BaseModel):
+    file_path: str
+    old_content: str = ""
+    new_content: str
+    reason: str = ""
+    skip_tests: bool = False
+
+
+@app.post("/api/modify")
+async def safe_modify(req: ModifyRequest):
+    """安全修改代码文件（自动 git 保护 + 验证 + 回滚）"""
+    from self_modifier import safe_modify as do_modify
+    result = do_modify(
+        file_path=req.file_path,
+        old_content=req.old_content,
+        new_content=req.new_content,
+        reason=req.reason,
+        skip_tests=req.skip_tests,
+    )
+    return result
+
+
+@app.get("/api/modify/log")
+async def modify_log(limit: int = Query(20)):
+    """查看修改历史"""
+    from self_modifier import get_git_log
+    return {"log": get_git_log(limit)}
+
+
+@app.post("/api/modify/rollback")
+async def modify_rollback(commit_hash: str = Query("")):
+    """回滚到指定 commit"""
+    if not commit_hash:
+        return {"success": False, "message": "请提供 commit hash"}
+    from self_modifier import rollback_to
+    return rollback_to(commit_hash)
+
+
 # --- Personas ---
 
 @app.get("/api/personas")
@@ -253,6 +308,9 @@ async def intent_chat(req: ChatRequest):
     conv_id = req.conversation_id or str(uuid.uuid4())
     user_message = req.message.strip()
 
+    # 获取对话历史（用于上下文理解）
+    history = conversations.get(conv_id, [])
+
     # 创建后台任务
     task = task_manager.create(user_message)
 
@@ -260,7 +318,7 @@ async def intent_chat(req: ChatRequest):
         nonlocal task
         try:
             from intent_engine import process
-            async for event in process(user_message):
+            async for event in process(user_message, conversation_history=history):
                 event["conversation_id"] = conv_id
                 event["task_id"] = task.id
 
@@ -486,6 +544,13 @@ async def confirm_memory(req: MemoryConfirmRequest):
     """用户确认/拒绝保存记忆"""
     from intent_engine import confirm_memory as do_confirm
     return do_confirm(req.pending_id, confirmed=req.confirmed)
+
+
+@app.post("/api/memory/cleanup")
+async def memory_cleanup():
+    """清理过期和低质量记忆"""
+    import memory_store as mem
+    return mem.cleanup_expired()
 
 
 # --- Skill Gap Analysis ---

@@ -35,6 +35,10 @@ INDEX_FILE = os.path.join(MEMORY_DIR, "index.json")
 
 MAX_ENTRIES = 200
 
+# 遗忘机制参数
+TTL_SECONDS = 30 * 24 * 3600  # 30 天未命中的记忆降权
+DEPRECATED_PENALTY = 0.3  # 被标记为 deprecated 的记忆在搜索中的权重惩罚
+
 # Ollama 配置（从 config.py 读取）
 OLLAMA_BASE = config.OLLAMA_HOST
 EMBED_MODEL = config.EMBED_MODEL
@@ -157,13 +161,14 @@ def _load_vector(entry_id: str) -> list[float] | None:
 # ========== 核心 API ==========
 
 
-def save(user_input: str, plan: list, result: str, tags: list[str] | None = None, step_results: list[dict] | None = None, entry_type: str = "success", extra: dict | None = None) -> str:
+def save(user_input: str, plan: list, result: str, tags: list[str] | None = None, step_results: list[dict] | None = None, entry_type: str = "success", extra: dict | None = None, reasoning: str = "") -> str:
     """
     保存一条记忆。
 
     参数：
       entry_type: "success" / "failure" / "knowledge" / "session" / "observation"
       extra: 类型特定的额外字段（如 observation 的 strength/dimension）
+      reasoning: WHY — 为什么这个方案可行 / 为什么失败（理解原理而非仅记步骤）
     """
     _ensure_dirs()
     entry_id = _compute_id(user_input)
@@ -190,6 +195,7 @@ def save(user_input: str, plan: list, result: str, tags: list[str] | None = None
         "plan": plan,
         "step_results": step_results or [],
         "result": result,
+        "reasoning": reasoning,  # WHY — 理解原理
         "keywords": keywords,
         "created_at": now,
         "updated_at": now,
@@ -347,6 +353,14 @@ def _keyword_match_score(query: str, query_keywords: list[str], entry: dict) -> 
     if hit_count > 0:
         score += min(hit_count * 0.5, 3.0)
 
+    # TTL 衰减：长时间未命中的记忆降权
+    ttl_score = get_ttl_score(entry)
+    score *= ttl_score
+
+    # deprecated 惩罚：被标记为失败的方案大幅降权
+    if entry.get("deprecated", False):
+        score *= DEPRECATED_PENALTY
+
     return score
 
 
@@ -450,6 +464,86 @@ def delete(entry_id: str):
         if entry_id in ids:
             ids.remove(entry_id)
     _save_index(index)
+
+
+# ========== 遗忘机制 ==========
+
+def mark_deprecated(entry_id: str, reason: str = ""):
+    """标记记忆为 deprecated（执行失败的方案）"""
+    entry = _load_entry(entry_id)
+    if not entry:
+        return
+    entry["deprecated"] = True
+    entry["deprecated_reason"] = reason
+    entry["updated_at"] = time.time()
+    with open(_entry_path(entry_id), "w", encoding="utf-8") as f:
+        json.dump(entry, f, ensure_ascii=False, indent=2)
+
+
+def get_ttl_score(entry: dict) -> float:
+    """
+    计算记忆的 TTL 衰减分数。
+    长时间未命中的记忆分数降低。
+    返回 0.0-1.0，1.0 = 新鲜，0.0 = 过期。
+    """
+    now = time.time()
+    last_access = entry.get("updated_at", entry.get("created_at", 0))
+    age = now - last_access
+
+    if age > TTL_SECONDS:
+        # 超过 TTL，按比例衰减
+        decay = max(0.1, 1.0 - (age - TTL_SECONDS) / TTL_SECONDS)
+        return decay
+
+    # hit_count 加成（频繁命中的记忆更持久）
+    hit_bonus = min(entry.get("hit_count", 0) * 0.1, 0.5)
+    return min(1.0 + hit_bonus, 1.5)
+
+
+def cleanup_expired() -> dict:
+    """
+    清理过期和低质量记忆。
+
+    规则：
+    1. deprecated + 超过 7 天 → 删除
+    2. 超过 60 天未命中 + hit_count == 0 → 删除
+    3. 超过 30 天未命中 → 降权（在搜索中排后）
+    """
+    index = _load_index()
+    now = time.time()
+    deleted = 0
+    deprioritized = 0
+
+    entries_to_keep = []
+    for entry_id in index["entries"]:
+        entry = _load_entry(entry_id)
+        if not entry:
+            deleted += 1
+            continue
+
+        age = now - entry.get("updated_at", entry.get("created_at", 0))
+        hit_count = entry.get("hit_count", 0)
+        is_deprecated = entry.get("deprecated", False)
+
+        # 规则 1: deprecated + 超过 7 天
+        if is_deprecated and age > 7 * 24 * 3600:
+            delete(entry_id)
+            deleted += 1
+            continue
+
+        # 规则 2: 超过 60 天未命中 + 从未被命中
+        if age > 60 * 24 * 3600 and hit_count == 0:
+            delete(entry_id)
+            deleted += 1
+            continue
+
+        entries_to_keep.append(entry_id)
+
+        # 规则 3: 超过 30 天未命中 → 标记降权
+        if age > TTL_SECONDS and not is_deprecated:
+            deprioritized += 1
+
+    return {"deleted": deleted, "deprioritized": deprioritized, "remaining": len(entries_to_keep)}
 
 
 def stats() -> dict:

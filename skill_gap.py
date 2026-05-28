@@ -49,6 +49,85 @@ def _save_json(path: str, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+# ========== 根因分析 ==========
+
+# 根因分类
+ROOT_CAUSE_CATEGORIES = {
+    "tool_missing": "工具不存在或未注册",
+    "param_error": "参数错误（类型、格式、缺失）",
+    "permission": "权限不足（文件访问、API 权限）",
+    "env_issue": "环境问题（依赖缺失、服务不可用）",
+    "logic_error": "逻辑错误（方案本身有误）",
+    "knowledge_gap": "知识盲区（不知道怎么做）",
+    "network": "网络问题（超时、连接失败）",
+    "timeout": "执行超时",
+    "unknown": "未知原因",
+}
+
+# 快速根因推断（基于错误关键词，不需要 LLM）
+_ERROR_PATTERNS = {
+    "tool_missing": ["not found", "unknown tool", "no such tool", "未找到工具"],
+    "param_error": ["invalid argument", "type error", "missing required", "参数错误", "validation error"],
+    "permission": ["permission denied", "access denied", "forbidden", "权限", "403"],
+    "env_issue": ["no module named", "module not found", "command not found", "not installed", "依赖", "import error"],
+    "network": ["connection error", "timeout", "network", "dns", "连接", "超时", "http error"],
+    "timeout": ["timeout", "timed out", "超时"],
+}
+
+
+def _quick_classify(error: str) -> str:
+    """快速根因推断（基于关键词匹配）"""
+    error_lower = error.lower()
+    for cause, patterns in _ERROR_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in error_lower:
+                return cause
+    return "unknown"
+
+
+def _llm_classify_root_cause(user_input: str, error: str, failed_action: str, context: str) -> dict:
+    """
+    用 LLM 深度分析失败根因。
+    只在快速分类返回 "unknown" 时调用，节省 API 调用。
+    """
+    prompt = f"""分析以下执行失败的根因，返回 JSON。
+
+用户指令：{user_input[:200]}
+失败工具：{failed_action}
+错误信息：{error[:300]}
+上下文：{context[:200]}
+
+根因分类（选一个）：
+- tool_missing: 工具不存在或未注册
+- param_error: 参数错误
+- permission: 权限不足
+- env_issue: 环境问题（依赖缺失等）
+- logic_error: 方案本身有误
+- knowledge_gap: 不知道怎么做
+- network: 网络问题
+- timeout: 超时
+- unknown: 未知
+
+返回 JSON：{{"root_cause": "分类", "detail": "一句话解释为什么", "fix_suggestion": "建议怎么修复"}}
+只输出 JSON。"""
+
+    try:
+        from llm_client import call_llm
+        result = call_llm("你是一个执行失败根因分析器。", prompt, temperature=0.1)
+        if result:
+            import json as _json
+            text = result.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if len(lines) >= 3:
+                    text = "\n".join(lines[1:-1])
+            return _json.loads(text)
+    except Exception:
+        pass
+
+    return {"root_cause": "unknown", "detail": "LLM 分析失败", "fix_suggestion": ""}
+
+
 # ========== 记录失败 ==========
 
 def record_failure(
@@ -59,11 +138,23 @@ def record_failure(
     source: str = "intent",
 ):
     """
-    记录一次失败事件。
+    记录一次失败事件，自动进行根因分析。
 
     source: "intent" | "agent" | "skill_match" | "validation"
     """
     gaps = _load_json(GAP_LOG_FILE, {"failures": []})
+
+    # 快速根因推断
+    root_cause = _quick_classify(error)
+
+    # 如果快速分类为 unknown，尝试 LLM 深度分析
+    cause_detail = ""
+    fix_suggestion = ""
+    if root_cause == "unknown" and len(error) > 10:
+        llm_result = _llm_classify_root_cause(user_input, error, failed_action, context)
+        root_cause = llm_result.get("root_cause", "unknown")
+        cause_detail = llm_result.get("detail", "")
+        fix_suggestion = llm_result.get("fix_suggestion", "")
 
     entry = {
         "id": f"{int(time.time()*1000)}_{len(gaps['failures'])}",
@@ -73,7 +164,10 @@ def record_failure(
         "context": context[:500],
         "failed_action": failed_action,
         "source": source,
-        "analyzed": False,
+        "root_cause": root_cause,
+        "cause_detail": cause_detail,
+        "fix_suggestion": fix_suggestion,
+        "analyzed": root_cause != "unknown",
     }
     gaps["failures"].append(entry)
 
@@ -164,11 +258,12 @@ def _extract_keywords(text: str) -> list[str]:
 
 def analyze_gaps() -> dict:
     """
-    分析所有失败记录，识别技能缺口。
+    分析所有失败记录，识别技能缺口和根因分布。
 
     返回：
       {
         "top_gaps": [{"domain": "xxx", "count": N, "examples": [...]}],
+        "root_cause_distribution": {"tool_missing": N, "env_issue": N, ...},
         "total_failures": N,
         "unanalyzed": N,
         "recommendations": ["topic1", "topic2", ...]
@@ -184,6 +279,9 @@ def analyze_gaps() -> dict:
     domain_counts = {}
     domain_examples = {}
 
+    # 按根因聚合
+    root_cause_counts = {}
+
     for f in failures:
         text = f.get("user_input", "") + " " + f.get("error", "") + " " + f.get("failed_action", "")
         domains = _extract_keywords(text)
@@ -193,6 +291,10 @@ def analyze_gaps() -> dict:
                 domain_examples[d] = []
             if len(domain_examples[d]) < 3:
                 domain_examples[d].append(f.get("user_input", "")[:100])
+
+        # 统计根因
+        rc = f.get("root_cause", "unknown")
+        root_cause_counts[rc] = root_cause_counts.get(rc, 0) + 1
 
     # 排序
     top_gaps = sorted(domain_counts.items(), key=lambda x: -x[1])
@@ -205,11 +307,17 @@ def analyze_gaps() -> dict:
         for domain, count in top_gaps[:10]
     ]
 
+    # 根因分布
+    root_cause_distribution = dict(
+        sorted(root_cause_counts.items(), key=lambda x: -x[1])
+    )
+
     # 用需求计数补充推荐
     top_keywords = list(demand.get("keywords", {}).keys())[:10]
 
     return {
         "top_gaps": top_gaps_list,
+        "root_cause_distribution": root_cause_distribution,
         "total_failures": len(failures),
         "unanalyzed": len(unanalyzed),
         "top_demand_keywords": top_keywords,

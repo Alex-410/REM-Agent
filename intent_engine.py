@@ -27,6 +27,7 @@ import output as output_mgr
 import desktop_context
 from tools.registry import ToolRegistry
 from tools import register_all_tools
+from llm_client import call_llm as _llm_call, call_llm_with_fallback
 
 registry = ToolRegistry()
 register_all_tools(registry)
@@ -106,25 +107,8 @@ PLANNING_PROMPT = """你是一个能理解中文指令并拆解为可执行步�
 
 
 def _call_llm(system_prompt: str, user_message: str, temperature: float = 0.1) -> str | None:
-    """调用 LLM 获取响应"""
-    try:
-        client = OpenAI(
-            api_key=config.API_KEY,
-            base_url=config.API_BASE_URL,
-            http_client=httpx.Client(trust_env=False),
-        )
-        resp = client.chat.completions.create(
-            model=config.MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=temperature,
-            timeout=config.TOOL_TIMEOUT,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return None
+    """调用 LLM 获取响应（带 fallback 降级）"""
+    return _llm_call(system_prompt, user_message, temperature)
 
 
 def _parse_plan(llm_output: str | None) -> list[dict] | None:
@@ -308,6 +292,9 @@ def confirm_memory(pending_id: str, confirmed: bool = True) -> dict:
     if not confirmed:
         return {"success": True, "message": "记忆已丢弃，不会保存"}
 
+    # 生成 WHY 解释：为什么这个方案可行
+    reasoning = _generate_reasoning(data)
+
     import memory_store as mem
     mem.save(
         user_input=data["user_input"],
@@ -315,8 +302,56 @@ def confirm_memory(pending_id: str, confirmed: bool = True) -> dict:
         result=data.get("result_summary", "成功"),
         step_results=data.get("step_results", []),
         tags=[],
+        reasoning=reasoning,
     )
     return {"success": True, "message": "记忆已保存，下次可直接复用"}
+
+
+def _generate_reasoning(data: dict) -> str:
+    """
+    用 LLM 生成 WHY 解释：为什么这个方案可行 / 为什么失败。
+    这是「理解 WHY 比 HOW 重要」原则的实现。
+    """
+    user_input = data.get("user_input", "")
+    plan = data.get("plan", [])
+    step_results = data.get("step_results", [])
+    had_failure = data.get("had_failure", False)
+
+    plan_summary = "\n".join(
+        f"  {i+1}. {s.get('action','')}: {s.get('description','')}"
+        for i, s in enumerate(plan)
+    )
+
+    results_summary = ""
+    for sr in step_results:
+        step_num = sr.get("step", "?")
+        action = sr.get("action", "")
+        if "error" in sr:
+            results_summary += f"  Step {step_num} ({action}): FAILED - {sr['error'][:100]}\n"
+        else:
+            r = sr.get("result", {})
+            results_summary += f"  Step {step_num} ({action}): OK - {str(r)[:100]}\n"
+
+    prompt = f"""分析以下任务执行，用 1-3 句话解释「为什么这个方案可行」或「为什么失败了」。
+重点是原理和原因，不是步骤描述。
+
+用户指令：{user_input}
+
+执行方案：
+{plan_summary}
+
+执行结果：
+{results_summary}
+
+是否失败：{'是' if had_failure else '否'}
+
+只输出原因分析，不要重复步骤。"""
+
+    try:
+        reasoning = _call_llm("你是一个执行结果分析器，专注于解释 WHY（原理和原因）。", prompt, temperature=0.1)
+        return reasoning[:500] if reasoning else ""
+    except Exception:
+        return ""
 
 
 def cleanup_expired_pending(max_age: int = 300):
@@ -632,12 +667,16 @@ async def _learn_and_plan(
     desktop_info: str,
     tools_text: str,
     output_rules: str,
+    history_context: str = "",
 ) -> tuple[list[dict] | None, list[dict]]:
     """
     自学模式：
     1. 问 LLM 是否需要搜索
     2. 需要？→ 搜索 + 读结果 → 综合制定方案
     3. 不需要？→ 直接生成方案
+
+    参数：
+      history_context: 最近的对话历史摘要（用于理解上下文引用）
 
     返回：(plan, research_events)
     research_events 是用于前端展示的事件列表
@@ -647,6 +686,8 @@ async def _learn_and_plan(
     # === 第一步：判断是否需要搜索 ===
     research_prompt = _RESEARCH_PROMPT
     research_input = f"用户指令：{user_input}\n\n桌面环境：{desktop_info}\n\n可用工具：{tools_text}"
+    if history_context:
+        research_input = f"最近对话：\n{history_context}\n\n{research_input}"
     llm_output = _call_llm(research_prompt, research_input, temperature=0.1)
 
     need_search = False
@@ -781,9 +822,15 @@ async def _learn_and_plan(
 async def process(
     user_input: str,
     memories: list[dict] | None = None,
+    conversation_history: list[dict] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     处理用户输入的模糊指令。
+
+    参数：
+      user_input: 用户当前输入
+      memories: 预加载的记忆（可选）
+      conversation_history: 最近 N 轮对话历史（用于理解上下文引用，如"刚才那个文件"）
 
     流程：
       查记忆 → 命中？→ 执行记住的方案
@@ -830,8 +877,21 @@ async def process(
     # 2a. 生成方案（自学模式：不确定就去搜索再回来制定方案）
     tools_text = _get_tool_summary()
     output_rules = output_mgr.describe_structure()
+
+    # 构建包含对话历史的上下文
+    history_context = ""
+    if conversation_history:
+        recent = conversation_history[-6:]  # 最近 3 轮
+        history_lines = []
+        for msg in recent:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")[:200]
+            history_lines.append(f"[{role}]: {content}")
+        history_context = "\n".join(history_lines)
+
     plan, research_events = await _learn_and_plan(
         user_input, desktop_info, tools_text, output_rules,
+        history_context=history_context,
     )
 
     # 输出研究过程事件（如果有）

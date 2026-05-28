@@ -12,6 +12,7 @@ from persona_manager import PersonaManager
 from workflow_state import WorkflowState
 from observation_engine import update_observations
 from adaptation_engine import get_adapted_system_prompt
+from llm_client import _pick_model, _mark_success, _mark_failure, _get_model_chain
 
 registry = ToolRegistry()
 register_all_tools(registry)
@@ -28,65 +29,33 @@ def build_system_prompt(wf: WorkflowState | None = None) -> str:
 
     sections = []
 
-    # 1. Core identity
+    # 1. Core identity (精简版 — slash 命令路由已由代码处理，不需要在 prompt 里重复)
     if persona.name == "general":
-        sections.append("""You are REM — Reforge, Evolvere, Mimir. A self-evolving AI agent with deep knowledge of the full software development lifecycle.
+        sections.append("""You are REM — Reforge, Evolvere, Mimir. A self-evolving AI agent.
 
-CORE RULES:
-1. You have access to tools — use them proactively. When asked a question that requires up-to-date info, search the web.
+RULES:
+1. Use tools proactively. Search the web for current info.
 2. Respond in Chinese unless asked otherwise.
 3. Keep responses concise and actionable.
-4. Think step by step before using tools.
-5. When the task is complex, break it into steps and work through them one at a time.
-6. After completing a task, summarize what was done and suggest next steps.
-
-TOOL USE:
-- web_search / web_fetch: For any knowledge questions, current info, news, facts
-- execute_python: For calculations, data analysis, automation
-- bash: For shell commands, git operations, build tools
-- read_file / write_file / list_files: For file operations
-- image_search / image_fetch: For finding and saving images
-- code_search: For searching codebases
-- git_status / git_diff / git_log / git_commit: For git operations
-- project_structure: For analyzing project layout""")
+4. Break complex tasks into steps.""")
     else:
-        # Persona-specific identity comes from the persona content
         sections.append(persona.content)
 
-    # 2. Workflow / lifecycle awareness
-    sections.append("""
-DEVELOPMENT LIFECYCLE:
-I recognize these development phases and can guide users through them:
-📋 Define → 🗺️ Plan → 🔧 Build → ✅ Verify → 👁️ Review → 🚀 Ship
-
-Users can use slash commands:
-/spec — Write a specification
-/plan — Break down into tasks
-/build — Implement incrementally
-/test — Write and run tests
-/review — Code review
-/ship — Prepare for deployment
-/phase <name> — Set current phase
-/skill <name> — Activate a skill
-/persona <name> — Switch persona (general, code-reviewer, security-auditor, test-engineer)
-/status — Show current workflow state
-/reset — Reset workflow state""")
-
-    # 3. Current workflow state
+    # 2. Current workflow state (只在有状态时注入)
     if wf:
         workflow_context = wf.get_phase_prompt()
         if workflow_context:
-            sections.append(f"CURRENT WORKFLOW STATE:\n{workflow_context}")
+            sections.append(f"WORKFLOW:\n{workflow_context}")
 
-    # 4. Active skill instructions
+    # 3. Active skill instructions
     if active_skill:
         skill_prompt = skill_engine.get_active_skill_prompt(active_skill)
         if skill_prompt:
             sections.append(skill_prompt)
 
-    # 5. Available tools
+    # 4. Available tools (只列名称，不展开说明)
     tool_names = [d["function"]["name"] for d in registry.get_definitions()]
-    sections.append(f"AVAILABLE TOOLS ({len(tool_names)}): {', '.join(sorted(tool_names))}")
+    sections.append(f"TOOLS ({len(tool_names)}): {', '.join(sorted(tool_names))}")
 
     return "\n\n---\n\n".join(sections)
 
@@ -123,12 +92,18 @@ async def run_agent(
 
     iteration = 0
     while iteration < config.MAX_ITERATIONS:
+        # 每次迭代选择最佳可用模型
+        current_model = _pick_model()
+        if not current_model:
+            yield {"type": "error", "content": "所有模型均不可用，请检查 API 配置"}
+            return
+
         try:
             import os, uuid
             _debug_id = str(uuid.uuid4())[:8]
             _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_api.log")
             with open(_log_path, "a", encoding="utf-8") as df:
-                df.write(f"[{_debug_id}] Call iteration={iteration}, msgs={len(messages)}:")
+                df.write(f"[{_debug_id}] Call iteration={iteration}, model={current_model}, msgs={len(messages)}:")
                 for mi, m in enumerate(messages):
                     has_tc = "tool_calls" in m
                     tc_count = len(m.get("tool_calls", [])) if has_tc else 0
@@ -136,14 +111,16 @@ async def run_agent(
                     df.write(f" [{mi}]{m.get('role')}|tc={tc_count}|tool={is_tool}")
                 df.write(f"\n")
             response = client.chat.completions.create(
-                model=config.DEEPSEEK_MODEL,
+                model=current_model,
                 messages=messages,
                 tools=registry.get_definitions(),
                 stream=False,
                 timeout=config.TOOL_TIMEOUT,
             )
+            _mark_success(current_model)
         except Exception as e:
-            # 报错时清理未配对的 tool_calls，防止历史消息污染下次请求
+            _mark_failure(current_model)
+            # 尝试下一个模型前，先清理未配对的 tool_calls
             invalid_starts = [i for i, m in enumerate(messages)
                               if m.get("tool_calls") and not any(
                                   t.get("role") == "tool" and t.get("tool_call_id") in {tc["id"] for tc in m["tool_calls"]}
@@ -151,7 +128,12 @@ async def run_agent(
                               )]
             for idx in reversed(invalid_starts):
                 del messages[idx]
-            yield {"type": "error", "content": f"API call failed: {str(e)}"}
+            # 如果有备用模型，继续尝试而不是直接报错
+            next_model = _pick_model()
+            if next_model and next_model != current_model:
+                yield {"type": "fallback", "from": current_model, "to": next_model}
+                continue
+            yield {"type": "error", "content": f"API call failed (tried {current_model}): {str(e)}"}
             return
 
         choice = response.choices[0]

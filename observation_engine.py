@@ -23,6 +23,7 @@ import memory_store as mem
 NEGATIVE_PATTERNS = [
     r"不是这样", r"不对", r"错了", r"太啰嗦", r"太长了", r"太短了",
     r"不要", r"别这样", r"换个方式", r"重新来", r"不对劲",
+    r"不好", r"不行", r"不太对", r"不满意", r"不喜欢",
     r"not like this", r"wrong", r"too long", r"too short",
     r"don't", r"stop", r"redo", r"try again",
 ]
@@ -73,16 +74,52 @@ DIMENSION_RULES = {
 
 
 def _detect_feedback(text: str) -> str | None:
-    """检测用户反馈类型：positive / negative / None"""
-    text_lower = text.lower().strip()
+    """
+    检测用户反馈类型：positive / negative / None
 
+    改进：上下文感知，减少误判
+    - 短消息（< 15 字）+ 反馈词在开头 → 高置信度反馈
+    - 长消息中的反馈词可能是其他语境（如"这个不行，但是..."）
+    - 包含否定词的"正反馈"应判为负反馈（如"不好"、"不行"）
+    """
+    text_stripped = text.strip()
+    text_lower = text_stripped.lower()
+    msg_len = len(text_stripped)
+
+    # 否定修饰检测：如果"正反馈词"前面有否定词，应判为负反馈
+    negation_prefixes = ["不", "没", "别", "不要", "不是", "不行", "不好", "不太", "not", "don't", "isn't", "doesn't"]
+
+    # 先检测负反馈
     for pattern in NEGATIVE_PATTERNS:
         if re.search(pattern, text_lower):
             return "negative"
 
+    # 检测正反馈（带上下文过滤）
     for pattern in POSITIVE_PATTERNS:
-        if re.search(pattern, text_lower):
-            return "positive"
+        match = re.search(pattern, text_lower)
+        if match:
+            matched_text = match.group()
+            match_pos = match.start()
+
+            # 检查是否有否定修饰
+            prefix = text_lower[max(0, match_pos - 5):match_pos]
+            if any(neg in prefix for neg in negation_prefixes):
+                return "negative"  # "不好" → 负反馈
+
+            # 短消息（< 10 字）+ 反馈词在前半部分 → 高置信度正反馈
+            if msg_len < 10 and match_pos < msg_len // 2:
+                return "positive"
+
+            # 长消息中独立出现的正反馈词（前后有标点或空格）
+            if msg_len >= 15:
+                # 检查是否是独立的词（前后有标点/空格/开头/结尾）
+                before = text_lower[match_pos - 1] if match_pos > 0 else " "
+                after = text_lower[match_pos + len(matched_text)] if match_pos + len(matched_text) < msg_len else " "
+                if before in " ,;.，。；！!?？\n\t" and after in " ,;.，。；！!?？\n\t":
+                    return "positive"
+
+            # 其他情况：不判定为反馈（避免误判）
+            continue
 
     return None
 

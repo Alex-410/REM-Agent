@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
+from self_modifier import git_protect, git_commit_changes
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILLS_DIR = os.path.join(BASE_DIR, "agent-skills", "skills")
@@ -201,8 +202,8 @@ class SelfLearningEngine:
                 await asyncio.sleep(10)
 
     async def _run_learning_cycle(self) -> dict:
-        """一次完整学习周期：搜技能 → 安装 → 自学 → 记录"""
-        result = {"new_skills": 0, "self_learned": 0, "details": []}
+        """一次完整学习周期：搜技能 → 安装 → 自学 → 失败复盘 → 记录"""
+        result = {"new_skills": 0, "self_learned": 0, "reviewed_failures": 0, "details": []}
 
         # 1. 从 GitHub 等来源搜索新技能
         new_skills = await self._search_new_skills()
@@ -220,7 +221,13 @@ class SelfLearningEngine:
                 result["self_learned"] += 1
                 result["details"].append(f"自学: {topic}")
 
-        # 3. 质量评估 + 归档低质量技能
+        # 3. 失败复盘：尝试用新知识解决之前的失败
+        reviewed = await self._review_failures()
+        result["reviewed_failures"] = reviewed
+        if reviewed > 0:
+            result["details"].append(f"复盘失败: {reviewed} 条")
+
+        # 4. 质量评估 + 归档低质量技能
         self._sync_from_disk()
         self._archive_low_quality()
 
@@ -353,8 +360,10 @@ class SelfLearningEngine:
 
                 if content:
                     filepath = os.path.join(target_dir, "SKILL.md")
+                    git_protect(f"before installing skill: {name}")
                     with open(filepath, "w", encoding="utf-8") as f:
                         f.write(content)
+                    git_commit_changes(f"install skill: {name} from {full_name}")
 
                     self._add_to_manifest(name, {
                         "description": skill_info.get("description", ""),
@@ -423,6 +432,84 @@ class SelfLearningEngine:
         except OSError:
             pass
 
+    async def _practice_verify(self, skill_name: str) -> dict:
+        """
+        实践验证：从 SKILL.md 中提取代码示例并尝试运行。
+
+        返回：
+          {"verified": bool, "code_blocks": int, "passed": int, "failed": int, "errors": [...]}
+        """
+        skill_path = os.path.join(SKILLS_DIR, skill_name, "SKILL.md")
+        if not os.path.isfile(skill_path):
+            return {"verified": False, "reason": "SKILL.md 不存在"}
+
+        with open(skill_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 提取 Python 代码块
+        code_blocks = re.findall(r'```python\s*\n(.*?)```', content, re.DOTALL)
+
+        if not code_blocks:
+            # 没有代码块，检查是否有 bash 命令
+            bash_blocks = re.findall(r'```bash\s*\n(.*?)```', content, re.DOTALL)
+            if not bash_blocks:
+                return {"verified": True, "reason": "无可执行代码，跳过实践验证", "code_blocks": 0, "passed": 0, "failed": 0}
+            # 有 bash 命令但没有 python，只做语法验证
+            return {"verified": True, "reason": "仅有 bash 命令，跳过执行验证", "code_blocks": len(bash_blocks), "passed": 0, "failed": 0}
+
+        # 逐个运行代码块（只运行安全的：import 语句、函数定义、简单计算）
+        passed = 0
+        failed = 0
+        errors = []
+
+        for i, block in enumerate(code_blocks[:3]):  # 最多验证 3 个代码块
+            block = block.strip()
+            if not block:
+                continue
+
+            # 安全检查：跳过包含危险操作的代码
+            dangerous = ["os.system", "subprocess", "shutil.rmtree", "open(", "exec(", "eval("]
+            if any(d in block for d in dangerous):
+                continue
+
+            # 只验证 import 语句和简单表达式
+            lines = block.split("\n")
+            safe_lines = []
+            for line in lines:
+                stripped = line.strip()
+                # 只保留 import、函数定义、类定义、变量赋值、简单计算
+                if (stripped.startswith("import ") or
+                    stripped.startswith("from ") or
+                    stripped.startswith("def ") or
+                    stripped.startswith("class ") or
+                    stripped.startswith("#") or
+                    stripped == "" or
+                    "=" in stripped and not stripped.startswith("print")):
+                    safe_lines.append(line)
+
+            if not safe_lines:
+                continue
+
+            safe_code = "\n".join(safe_lines)
+
+            try:
+                # 在隔离的命名空间中执行
+                exec_globals = {"__builtins__": __builtins__}
+                exec(safe_code, exec_globals)
+                passed += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"Block {i+1}: {str(e)[:200]}")
+
+        verified = failed == 0 or passed > failed
+        return {
+            "verified": verified,
+            "code_blocks": len(code_blocks),
+            "passed": passed,
+            "failed": failed,
+            "errors": errors[:5],
+        }
+
     # ========== 安装常用技能包 ==========
 
     async def _install_starter_skills(self):
@@ -455,8 +542,10 @@ class SelfLearningEngine:
 
             os.makedirs(skill_dir, exist_ok=True)
             filepath = os.path.join(skill_dir, "SKILL.md")
+            git_protect(f"before installing starter skill: {name}")
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)
+            git_commit_changes(f"install starter skill: {name}")
 
             self._add_to_manifest(name, {
                 "description": skill["description"],
@@ -505,10 +594,130 @@ class SelfLearningEngine:
         all_gaps = dynamic_gaps + [g for g in static_gaps if g not in dynamic_gaps]
         return [g for g in all_gaps if g not in known_skills and g not in already_learned]
 
+    async def _review_failures(self) -> int:
+        """
+        失败复盘：取出最近的失败记录，尝试用新学到的技能重新解决。
+        返回成功复盘的数量。
+        """
+        try:
+            from skill_gap import _load_json, GAP_LOG_FILE, _save_json
+        except ImportError:
+            return 0
+
+        gaps = _load_json(GAP_LOG_FILE, {"failures": []})
+        failures = gaps.get("failures", [])
+
+        # 只复盘最近 7 天内、未分析的失败
+        import time
+        now = time.time()
+        recent = [
+            f for f in failures
+            if not f.get("analyzed") and not f.get("reviewed")
+            and now - self._parse_ts(f.get("timestamp", "")) < 7 * 24 * 3600
+        ]
+
+        if not recent:
+            return 0
+
+        reviewed = 0
+        for failure in recent[:3]:  # 每次最多复盘 3 条
+            root_cause = failure.get("root_cause", "unknown")
+            failed_action = failure.get("failed_action", "")
+            error = failure.get("error", "")
+
+            # 根据根因尝试找到解决方案
+            if root_cause == "env_issue":
+                # 环境问题：尝试安装缺失的依赖
+                if "no module named" in error.lower():
+                    import re
+                    m = re.search(r"no module named ['\"]([^'\"]+)['\"]", error.lower())
+                    if m:
+                        pkg = m.group(1).split(".")[0]
+                        try:
+                            import subprocess
+                            r = subprocess.run(
+                                ["pip", "install", pkg],
+                                capture_output=True, text=True, timeout=60
+                            )
+                            if r.returncode == 0:
+                                failure["reviewed"] = True
+                                failure["review_result"] = f"已安装缺失依赖: {pkg}"
+                                reviewed += 1
+                        except Exception:
+                            pass
+
+            elif root_cause == "knowledge_gap":
+                # 知识盲区：尝试搜索解决方案
+                topic = failure.get("user_input", "")[:50]
+                if topic:
+                    info = await self._research_and_generate_skill(topic)
+                    if info:
+                        failure["reviewed"] = True
+                        failure["review_result"] = f"已自学相关技能: {info.get('topic', '')}"
+                        reviewed += 1
+
+            # 标记为已复盘（无论是否解决）
+            if not failure.get("reviewed"):
+                failure["reviewed"] = True
+                failure["review_result"] = "复盘完成，未找到自动解决方案"
+
+        # 保存更新
+        _save_json(GAP_LOG_FILE, gaps)
+        return reviewed
+
+    @staticmethod
+    def _parse_ts(ts: str) -> float:
+        """解析时间戳"""
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return dt.timestamp()
+        except (ValueError, AttributeError):
+            return 0.0
+
+    def _has_similar_skill(self, topic: str) -> bool:
+        """
+        检查是否已有语义相同的技能。
+        使用关键词匹配 + 描述相似度判断。
+        """
+        topic_lower = topic.lower().replace("-", " ").replace("_", " ")
+        topic_words = set(topic_lower.split())
+
+        for skill in self.manifest.get("skills", []):
+            if skill.get("status") == "removed":
+                continue
+
+            skill_name = skill.get("name", "").lower().replace("-", " ").replace("_", " ")
+            skill_desc = skill.get("description", "").lower()
+
+            # 名称完全匹配
+            if skill_name == topic_lower:
+                return True
+
+            # 名称高度重叠（> 60% 的词相同）
+            skill_words = set(skill_name.split())
+            if topic_words and skill_words:
+                overlap = len(topic_words & skill_words)
+                if overlap / len(topic_words) > 0.6:
+                    return True
+
+            # 描述包含主题关键词
+            if topic_lower in skill_desc:
+                return True
+
+        return False
+
     async def _research_and_generate_skill(self, topic: str) -> dict | None:
         """搜索一个主题，综合信息并生成 SKILL.md"""
         from tools.web_search import web_search
         from tools.web_fetch import web_fetch
+
+        # 去重检查：是否已有语义相同的技能
+        if self._has_similar_skill(topic):
+            print(f"[SelfLearning] 跳过重复技能: {topic}")
+            self.state.setdefault("learned_topics", []).append(topic)
+            self._save_state()
+            return None
 
         # 搜索主题相关技术
         queries = [
@@ -547,12 +756,14 @@ class SelfLearningEngine:
         if not skill_content:
             return None
 
-        # 写入文件
+        # 写入文件（git 保护）
         skill_dir = os.path.join(SKILLS_DIR, topic)
         os.makedirs(skill_dir, exist_ok=True)
         filepath = os.path.join(skill_dir, "SKILL.md")
+        git_protect(f"before self-learning skill: {topic}")
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(skill_content)
+        git_commit_changes(f"self-learn skill: {topic}")
 
         # 注册到 manifest
         desc = self._extract_description(skill_content)
@@ -576,10 +787,24 @@ class SelfLearningEngine:
 
         print(f"[SelfLearning] 自学完成: {topic}")
 
-        # 自学完成后验证技能
+        # 实践验证：运行代码示例
+        practice_result = await self._practice_verify(topic)
+        if not practice_result.get("verified"):
+            print(f"[SelfLearning] 实践验证未通过: {topic} - {practice_result.get('errors', [])[:2]}")
+            self._log_learning_event({
+                "type": "practice_verify",
+                "name": topic,
+                "verified": False,
+                "code_blocks": practice_result.get("code_blocks", 0),
+                "passed": practice_result.get("passed", 0),
+                "failed": practice_result.get("failed", 0),
+                "errors": practice_result.get("errors", [])[:3],
+            })
+
+        # 形式验证
         await self._validate_skill_async(topic)
 
-        return {"topic": topic, "description": desc}
+        return {"topic": topic, "description": desc, "practice_verified": practice_result.get("verified", False)}
 
     # ========== 质量评分 + 分级 ==========
 
@@ -621,7 +846,49 @@ class SelfLearningEngine:
         elif len(desc) > 20:
             score += 5
 
+        # 5. 内容质量验证 (+0~20) — LLM 判断内容是否有实际价值
+        content_score = self._evaluate_content_quality(content)
+        score += content_score
+
         return min(score, 100)
+
+    def _evaluate_content_quality(self, content: str) -> int:
+        """
+        用 LLM 快速评估 SKILL.md 内容质量。
+        返回 0-20 分。
+        只在内容较长时调用（节省 API 调用）。
+        """
+        if len(content) < 100:
+            return 0
+
+        # 截取关键部分评估（节省 token）
+        sample = content[:2000]
+
+        prompt = f"""快速评估以下技能文档的质量（0-20 分）。
+
+评分标准：
+- 10+ 分：有具体命令/代码示例，步骤清晰可执行
+- 5-9 分：有基本框架但缺少细节
+- 0-4 分：空洞、泛泛而谈、无实际操作指导
+
+文档内容：
+{sample}
+
+只输出一个数字（0-20）。"""
+
+        try:
+            from llm_client import call_llm
+            result = call_llm("你是技能文档质量评估器。", prompt, temperature=0.1)
+            if result:
+                # 提取数字
+                import re
+                match = re.search(r'\d+', result)
+                if match:
+                    return min(int(match.group()), 20)
+        except Exception:
+            pass
+
+        return 5  # 默认中等分
 
     def _get_quality_level(self, score: int) -> str:
         """根据质量分返回等级"""
