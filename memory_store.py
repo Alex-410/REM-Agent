@@ -574,6 +574,153 @@ def stats() -> dict:
     }
 
 
+def consolidate_memories(similarity_threshold: float = 0.85) -> dict:
+    """
+    记忆合并：检测相似记忆并整合。
+
+    策略：
+    1. 对所有有向量的记忆做两两余弦相似度计算
+    2. 相似度 > threshold 的记忆对视为重复
+    3. 合并：保留更新/命中更多的那条，合并关键词，保留更好的 plan
+    4. 删除冗余条目
+    """
+    index = _load_index()
+    entry_ids = index.get("entries", [])
+    if len(entry_ids) < 2:
+        return {"merged": 0, "pairs_found": 0, "message": "记忆太少，无需合并"}
+
+    # 加载所有有向量的条目
+    entries_with_vec: list[tuple[str, dict, list[float]]] = []
+    for eid in entry_ids:
+        entry = _load_entry(eid)
+        if not entry:
+            continue
+        vec = _load_vector(eid)
+        if vec:
+            entries_with_vec.append((eid, entry, vec))
+
+    if len(entries_with_vec) < 2:
+        return {"merged": 0, "pairs_found": 0, "message": "有向量的记忆太少"}
+
+    # 找出相似对
+    similar_pairs: list[tuple[str, str, float]] = []
+    for i in range(len(entries_with_vec)):
+        for j in range(i + 1, len(entries_with_vec)):
+            eid_a, entry_a, vec_a = entries_with_vec[i]
+            eid_b, entry_b, vec_b = entries_with_vec[j]
+
+            # 跳过不同类型的记忆（如 observation 和 success 不合并）
+            type_a = entry_a.get("type", "success")
+            type_b = entry_b.get("type", "success")
+            if type_a != type_b:
+                continue
+
+            sim = _cosine_similarity(vec_a, vec_b)
+            if sim >= similarity_threshold:
+                similar_pairs.append((eid_a, eid_b, sim))
+
+    if not similar_pairs:
+        return {"merged": 0, "pairs_found": 0, "message": "未发现相似记忆"}
+
+    # 合并（使用 union-find 避免链式合并问题）
+    parent: dict[str, str] = {eid: eid for eid in entry_ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            # 保留更新的那条作为根
+            ea, eb = _load_entry(ra), _load_entry(rb)
+            if ea and eb:
+                ta = ea.get("updated_at", ea.get("created_at", 0))
+                tb = eb.get("updated_at", eb.get("created_at", 0))
+                if tb > ta:
+                    parent[ra] = rb
+                else:
+                    parent[rb] = ra
+            else:
+                parent[rb] = ra
+
+    for eid_a, eid_b, _ in similar_pairs:
+        union(eid_a, eid_b)
+
+    # 按组收集
+    groups: dict[str, list[str]] = {}
+    for eid in entry_ids:
+        root = find(eid)
+        if root not in groups:
+            groups[root] = []
+        groups[root].append(eid)
+
+    # 合并每组
+    merged = 0
+    for root, members in groups.items():
+        if len(members) <= 1:
+            continue
+
+        # 加载所有成员
+        loaded = []
+        for mid in members:
+            e = _load_entry(mid)
+            if e:
+                loaded.append((mid, e))
+
+        if len(loaded) <= 1:
+            continue
+
+        # 选择保留哪条：hit_count 最高的，或最新的
+        loaded.sort(key=lambda x: (
+            x[1].get("hit_count", 0),
+            x[1].get("updated_at", x[1].get("created_at", 0)),
+        ), reverse=True)
+
+        keep_id, keep_entry = loaded[0]
+
+        # 合并关键词
+        all_keywords = set(keep_entry.get("keywords", []))
+        all_hit_count = keep_entry.get("hit_count", 0)
+        for mid, ment in loaded[1:]:
+            all_keywords.update(ment.get("keywords", []))
+            all_hit_count += ment.get("hit_count", 0)
+            # 如果被合并的记忆有更好的 reasoning，保留
+            if not keep_entry.get("reasoning") and ment.get("reasoning"):
+                keep_entry["reasoning"] = ment["reasoning"]
+            # 如果被合并的记忆有更好的 plan（更长），替换
+            if len(ment.get("plan", [])) > len(keep_entry.get("plan", [])):
+                keep_entry["plan"] = ment["plan"]
+                keep_entry["step_results"] = ment.get("step_results", [])
+
+        keep_entry["keywords"] = list(all_keywords)
+        keep_entry["hit_count"] = all_hit_count
+        keep_entry["updated_at"] = time.time()
+        keep_entry["merged_from"] = [mid for mid, _ in loaded[1:]]
+
+        # 保存合并后的条目
+        with open(_entry_path(keep_id), "w", encoding="utf-8") as f:
+            json.dump(keep_entry, f, ensure_ascii=False, indent=2)
+
+        # 重新生成向量（合并后的文本变了）
+        _sync_vector_async(keep_id, keep_entry.get("user_input", ""))
+
+        # 删除冗余条目
+        for mid, _ in loaded[1:]:
+            if mid != keep_id:
+                delete(mid)
+                merged += 1
+
+    return {
+        "merged": merged,
+        "pairs_found": len(similar_pairs),
+        "groups": len([g for g in groups.values() if len(g) > 1]),
+        "remaining": len(index["entries"]) - merged,
+    }
+
+
 def rebuild_vectors():
     """为所有还没有向量的条目生成向量"""
     index = _load_index()

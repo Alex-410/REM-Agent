@@ -936,3 +936,77 @@ def register_all_tools(registry: ToolRegistry):
         },
         _safety_audit
     )
+
+    # --- 工具链式调用 ---
+
+    def _batch_tools(calls: list) -> dict:
+        """
+        批量执行多个工具调用。
+
+        参数 calls: 工具调用列表，每个元素为 {"tool": "工具名", "args": {...}}
+        返回: {"results": [{"tool": ..., "result": ...}, ...], "success_count": N, "fail_count": N}
+        """
+        import asyncio
+
+        if not calls or not isinstance(calls, list):
+            return {"error": "calls 参数必须是非空列表"}
+
+        results = []
+        success_count = 0
+        fail_count = 0
+
+        loop = asyncio.new_event_loop()
+        try:
+            for call in calls:
+                tool_name = call.get("tool", "")
+                tool_args = call.get("args", {})
+
+                if not tool_name:
+                    results.append({"tool": tool_name, "result": {"error": "缺少 tool 参数"}})
+                    fail_count += 1
+                    continue
+
+                try:
+                    result = loop.run_until_complete(registry.execute(tool_name, tool_args))
+                    is_error = isinstance(result, dict) and result.get("error")
+                    results.append({"tool": tool_name, "result": result})
+                    if is_error:
+                        fail_count += 1
+                    else:
+                        success_count += 1
+                except Exception as e:
+                    results.append({"tool": tool_name, "result": {"error": str(e)}})
+                    fail_count += 1
+        finally:
+            loop.close()
+
+        return {
+            "results": results,
+            "total": len(calls),
+            "success_count": success_count,
+            "fail_count": fail_count,
+        }
+
+    registry.register(
+        "batch_tools",
+        "批量执行多个工具调用。用于一次性完成多个操作，减少往返。每个调用格式：{\"tool\": \"工具名\", \"args\": {...}}",
+        {
+            "type": "object",
+            "properties": {
+                "calls": {
+                    "type": "array",
+                    "description": "工具调用列表",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string", "description": "工具名"},
+                            "args": {"type": "object", "description": "工具参数"}
+                        },
+                        "required": ["tool", "args"]
+                    }
+                }
+            },
+            "required": ["calls"]
+        },
+        _batch_tools
+    )

@@ -176,7 +176,20 @@ class SkillIntegrator:
                 "message": f"创建工具文件失败: {result.get('message', '')}",
             }
 
-        # 4. 生成注册代码并添加到 __init__.py
+        # 4. 功能测试：验证生成的工具能正常工作
+        test_result = self._test_generated_tool(tool_name, tool_code)
+        if not test_result.get("passed"):
+            # 测试失败，回滚
+            from self_modifier import git_rollback
+            if result.get("commit"):
+                git_rollback(result["commit"])
+            return {
+                "integrated": False,
+                "type": "new_tool",
+                "message": f"功能测试失败，已回滚: {test_result.get('error', '')}",
+            }
+
+        # 5. 生成注册代码并添加到 __init__.py
         register_ok = await self._register_tool(tool_name, tool_desc, tool_code)
         if not register_ok:
             return {
@@ -244,6 +257,68 @@ class SkillIntegrator:
             "message": result.get("message", ""),
             "file": target_file,
         }
+
+    def _test_generated_tool(self, tool_name: str, tool_code: str) -> dict:
+        """
+        功能测试：验证生成的工具能正常 import 和调用。
+
+        测试步骤：
+        1. 语法检查（ast.parse）
+        2. Import 检查（动态导入模块）
+        3. 函数存在性检查（主函数是否存在）
+        4. 空参数调用测试（用空字符串调用，验证返回 dict）
+        """
+        import ast
+        import importlib
+
+        # 1. 语法检查
+        try:
+            ast.parse(tool_code)
+        except SyntaxError as e:
+            return {"passed": False, "error": f"语法错误: {e}"}
+
+        # 2. Import 检查
+        module_path = os.path.join(TOOLS_DIR, f"{tool_name}.py")
+        if not os.path.isfile(module_path):
+            return {"passed": False, "error": f"模块文件不存在: {module_path}"}
+
+        try:
+            spec = importlib.util.spec_from_file_location(f"tools.{tool_name}", module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as e:
+            return {"passed": False, "error": f"Import 失败: {e}"}
+
+        # 3. 函数存在性检查
+        func = getattr(module, tool_name, None)
+        if not func or not callable(func):
+            return {"passed": False, "error": f"主函数 {tool_name} 不存在或不可调用"}
+
+        # 4. 空参数调用测试（用空字符串，验证返回 dict）
+        try:
+            import inspect
+            sig = inspect.signature(func)
+            params = [p for p in sig.parameters if p != "self"]
+            # 用空字符串填充所有参数
+            test_args = {p: "" for p in params}
+            result = func(**test_args)
+
+            if not isinstance(result, dict):
+                return {"passed": False, "error": f"返回值不是 dict: {type(result)}"}
+
+            # 成功返回或错误返回都算通过（只要不崩溃）
+            return {"passed": True, "result": result}
+        except TypeError as e:
+            # 参数签名不匹配 — 可能是参数类型不同，尝试无参调用
+            try:
+                result = func()
+                if isinstance(result, dict):
+                    return {"passed": True, "result": result}
+                return {"passed": False, "error": f"无参调用返回非 dict: {type(result)}"}
+            except Exception as e2:
+                return {"passed": False, "error": f"调用失败: {e2}"}
+        except Exception as e:
+            return {"passed": False, "error": f"调用异常: {e}"}
 
     async def _generate_tool_code(self, tool_name: str, description: str, dependencies: list) -> str:
         """用 LLM 生成工具代码"""

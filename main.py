@@ -553,6 +553,13 @@ async def memory_cleanup():
     return mem.cleanup_expired()
 
 
+@app.post("/api/memory/consolidate")
+async def memory_consolidate(threshold: float = Query(0.85, description="相似度阈值 (0-1)")):
+    """合并相似记忆，去重整合"""
+    import memory_store as mem
+    return mem.consolidate_memories(similarity_threshold=threshold)
+
+
 # --- Skill Gap Analysis ---
 
 @app.get("/api/skills/gaps")
